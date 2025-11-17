@@ -7,10 +7,6 @@
  * contact@alifsemi.com, or visit: https://alifsemi.com/license
  */
 
-/* This application demonstrates the communication and control of a device
- * allowing to remotely control an LED, and to transmit the state of a button.
- */
-
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 
@@ -22,11 +18,10 @@
 #include <zephyr/drivers/counter.h>
 #include <zephyr/drivers/uart.h>
 #include <cmsis_core.h>
-#include <soc.h>
+#include <soc_common.h>
 #include <se_service.h>
 #include <es0_power_manager.h>
 
-#include <pm_rtss.h>
 #include "alif_ble.h"
 #include "gapm.h"
 #include "gap_le.h"
@@ -39,7 +34,7 @@
 #include "gatt_db.h"
 #include "gatt_srv.h"
 #include "ke_mem.h"
-#include <power_mgr.h>
+#include "power_mgr.h"
 
 /* Configuration for different BLE and application timing parameters
  */
@@ -363,7 +358,6 @@ static const gapc_le_config_cb_t gapc_le_cfg_cbs = {
 	.subrate_updated = on_subrate_updated,
 };
 
-#if !CONFIG_ALIF_BLE_ROM_IMAGE_V1_0 /* ROM version > 1.0 */
 static void on_gapm_err(uint32_t metainfo, uint8_t code)
 {
 	LOG_ERR("gapm error %d", code);
@@ -380,24 +374,6 @@ static const gapm_callbacks_t gapm_cbs = {
 	.p_bt_config_cbs = NULL, /* BT classic so not required */
 	.p_gapm_cbs = &gapm_err_cbs,
 };
-#else
-static void on_gapm_err(enum co_error err)
-{
-	LOG_ERR("gapm error %d", err);
-}
-static const gapm_err_info_config_cb_t gapm_err_cbs = {
-	.ctrl_hw_error = on_gapm_err,
-};
-
-static const gapm_callbacks_t gapm_cbs = {
-	.p_con_req_cbs = &gapc_con_cbs,
-	.p_sec_cbs = &gapc_sec_cbs,
-	.p_info_cbs = &gapc_con_inf_cbs,
-	.p_le_config_cbs = &gapc_le_cfg_cbs,
-	.p_bt_config_cbs = NULL, /* BT classic so not required */
-	.p_err_info_config_cbs = &gapm_err_cbs,
-};
-#endif /* !CONFIG_ALIF_BLE_ROM_IMAGE_V1_0 */
 
 static uint16_t set_advertising_data(uint8_t actv_idx)
 {
@@ -526,11 +502,7 @@ static uint16_t create_advertising(void)
 	gapm_le_adv_create_param_t adv_create_params = {
 		.prop = GAPM_ADV_PROP_UNDIR_CONN_MASK,
 		.disc_mode = GAPM_ADV_MODE_GEN_DISC,
-#if !CONFIG_ALIF_BLE_ROM_IMAGE_V1_0 /* ROM version > 1.0 */
 		.tx_pwr = 0,
-#else
-		.max_tx_pwr = 0,
-#endif /* !CONFIG_ALIF_BLE_ROM_IMAGE_V1_0 */
 		.filter_pol = GAPM_ADV_ALLOW_SCAN_ANY_CON_ANY,
 		.prim_cfg = {
 				.adv_intv_min = ADV_INT_MIN_SLOTS,
