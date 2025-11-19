@@ -14,7 +14,61 @@
 	};
 
 	soc {
+
+		gpu2d: dave2d@49040000 {
+			compatible = "tes,dave2d";
+			reg = < 0x49040000 0x1000 >;
+			interrupts = < 332 2 >;
+			clocks = < &clockctrl ALIF_GPU_CLK >;
+		};
+
+		dphy: d-phy@4903f000{
+			compatible = "snps,designware-dphy";
+			reg = <0x4903f000 0x40>,
+				<0x49032000 0x1000>,
+				<0x49033000 0x1000>;
+			reg-names = "expmst_reg", "dsi_reg", "csi_reg";
+
+			clocks = <&clockctrl ALIF_MIPI_PLLREF_CLK>;
+			clock-names = "pllref-clk";
+
+			ref-frequency = <38400000>;
+			cfg-clk-frequency = <25000000>;
+			status = "okay";
+		};
+
+
+
 		cdc200: cdc200@49031000 {
+			compatible = "tes,cdc-2.1";
+			reg = <0x49031000 0x1000>;
+			status = "okay";
+			interrupts =	<333 0>,
+					<334 0>,
+					<335 0>,
+					<336 0>,
+					<337 0>,
+					<338 0>,
+					<339 0>,
+					<340 0>,
+					<341 0>,
+					<342 0>;
+			interrupt-names = "scanline_0",
+					"scanline_1",
+					"fifo_warning_0",
+					"fifo_warning_1",
+					"fifo_underrun_0",
+					"fifo_underrun_1",
+					"bus_error_0",
+					"bus_error_1",
+					"reg_reload_0",
+					"reg_reload_1";
+			pinctrl-0 = < &pinctrl_cdc200 >;
+			pinctrl-names = "default";
+
+			clocks = <&clockctrl ALIF_DPI_CLK>, <&clockctrl ALIF_CDC200_PIX_SYST_ACLK>;
+			clock-names = "dpi-clk-en", "pixel-clk";
+
 			width = <480>;
 			height = <800>;
 			hfront-porch = <5>;
@@ -51,6 +105,7 @@
 		};
 	};
 };
+
 
 &mipi_dsi {
 	status = "okay";
