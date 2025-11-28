@@ -11,6 +11,8 @@
 / {
 	aliases {
 		d2-inst = &gpu2d;
+		mipi-dsi = &mipi_dsi;
+		panel = &mw405;	
 	};
 
 	soc {

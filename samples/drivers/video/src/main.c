@@ -10,6 +10,8 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 
+#include <soc_common.h>
+
 #ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
 #include <zephyr/drivers/video/hm0360-video-controls.h>
 #endif /* CONFIG_DT_HAS_HIMAX_HM0360_ENABLED */

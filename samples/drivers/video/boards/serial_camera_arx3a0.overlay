@@ -11,6 +11,30 @@
 #include <dt-bindings/i2c/i2c.h>
 #include <dt-bindings/gpio/gpio.h>
 
+/ {
+	soc {
+
+		csi: csi@49033000 {
+			compatible = "snps,designware-csi";
+			reg = <0x49033000 0x1000>;
+			interrupts = <344 0>;
+
+			data-lanes = <2>;
+			ipi-mode = "Camera";
+			phy-if = <&dphy>;
+
+			csi-hsa = <5>;
+			csi-hbp = <10>;
+			csi-hsd = <280>;
+			csi-hact = <560>;
+			csi-vsa = <4>;
+			csi-vbp = <4>;
+			csi-vfp = <4>;
+			csi-vact = <560>;
+		};
+	};
+};
+
 
 &i2c1 {
 	status = "okay";
