@@ -10,6 +10,7 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 
+#include <se_service.h>
 #include <soc_common.h>
 
 #ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
@@ -24,6 +25,57 @@ LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 #else
 #define FORMAT_TO_CAPTURE	VIDEO_PIX_FMT_GREY
 #endif /* CONFIG_DT_HAS_HIMAX_HM0360_ENABLED */
+
+/**
+* Set the RUN profile parameters for this application.
+*/
+static int app_set_run_params(void)
+{
+	run_profile_t runp;
+	int ret;
+ 
+	/* Enable HFOSC (38.4 MHz) and CFG (100 MHz) clock. */
+	sys_set_bits(CGU_CLK_ENA, BIT(21) | BIT(23));
+ 
+	runp.power_domains = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
+	runp.dcdc_voltage  = 825;
+	runp.dcdc_mode     = DCDC_MODE_PWM;
+	runp.aon_clk_src   = CLK_SRC_LFXO;
+	runp.run_clk_src   = CLK_SRC_PLL;
+	runp.vdd_ioflex_3V3 = IOFLEX_LEVEL_1V8;
+#if defined(CONFIG_RTSS_HP)
+	runp.cpu_clk_freq  = CLOCK_FREQUENCY_400MHZ;
+#else
+	runp.cpu_clk_freq  = CLOCK_FREQUENCY_160MHZ;
+#endif
+ 
+	runp.memory_blocks = MRAM_MASK;
+#if defined(CONFIG_SOC_SERIES_E7) || defined(CONFIG_SOC_SERIES_E5) || \
+	defined(CONFIG_SOC_SERIES_E3)
+	runp.memory_blocks |= SRAM0_MASK | SRAM1_MASK;
+#endif
+	runp.phy_pwr_gating = MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK |
+		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK;
+	runp.ip_clock_gating = CDC200_MASK | MIPI_DSI_MASK | GPU_MASK;
+ 
+	ret = se_service_set_run_cfg(&runp);
+	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);
+ 
+	return ret;
+}
+
+/*
+* CRITICAL: Must run at PRE_KERNEL_1 to restore SYSTOP before peripherals initialize.
+*
+* Priority 46 ensures this runs:
+*   - AFTER SE Services (priority 45) - SE must be ready for set_run_cfg()
+*   - BEFORE Power Domain (priority 47) - Power domain needs SYSTOP enabled
+*   - BEFORE UART and peripherals (priority 50+) - Peripherals need SYSTOP ON
+*
+* On cold boot: SYSTOP is already ON by default, safe to call.
+* On SOFT_OFF wakeup: SYSTOP is OFF, must restore BEFORE peripherals access registers.
+*/
+SYS_INIT(app_set_run_params, PRE_KERNEL_1, 46);
 
 int main(void)
 {
@@ -68,6 +120,8 @@ int main(void)
 		       (char)(fcap->pixelformat >> 24),
 		       fcap->width_min, fcap->width_max, fcap->width_step,
 		       fcap->height_min, fcap->height_max, fcap->height_step);
+
+		printk("pixelformat: %u\n", fcap->pixelformat);
 
 		if (fcap->pixelformat == FORMAT_TO_CAPTURE) {
 			fmt.pixelformat = FORMAT_TO_CAPTURE;

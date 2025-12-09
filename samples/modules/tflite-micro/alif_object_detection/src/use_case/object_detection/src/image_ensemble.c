@@ -152,7 +152,7 @@ int image_init()
 	}
 
     /*
-    ret = video_set_ctrl(video_dev, VIDEO_CID_CAMERA_GAIN, (void *)-1);
+    ret = video_set_ctrl(video_dev, VIDEO_CID_GAIN, (void *)-1);
     if (ret) {
         LOG_ERR("Unable set camera gain. ret - %d", ret);
 		return -1;
@@ -260,7 +260,7 @@ static void process_autogain(void)
     /* Apply the gain, if it's a new request */
     if (desired_api_gain != last_requested_api_gain) {
         //int32_t ret = camera_gain(desired_api_gain);
-        int ret = video_set_ctrl(video_dev, VIDEO_CID_CAMERA_GAIN, (void *)desired_api_gain);
+        int ret = video_set_ctrl(video_dev, VIDEO_CID_GAIN, (void *)desired_api_gain);
         if (ret < 0) {
             LOG_ERR("Camera gain error %" PRId32 "", ret);
             return;
