@@ -39,6 +39,9 @@
 
 LOG_MODULE_REGISTER(image_ensemble);
 
+#define VIDEO_CTRL_CLASS_CAMERA		0x00010000	/**< Camera class controls */
+#define VIDEO_CID_CAMERA_GAIN		(VIDEO_CTRL_CLASS_CAMERA + 1)
+
 
 
 /* Camera fills the raw_image buffer.
@@ -72,7 +75,7 @@ int image_init()
 	int i = 0;
 	int ret;
 
-    video_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_camera));
+    video_dev = DEVICE_DT_GET_ONE(alif_cam);
 	if (!device_is_ready(video_dev)) {
 		LOG_ERR("%s: device not ready.", video_dev->name);
 		return -1;
@@ -130,7 +133,7 @@ int image_init()
 	printk("Width - %d, Pitch - %d, Height - %d, Buff size - %d\n",
 			fmt.width, fmt.pitch, fmt.height, bsize);
 
-    buffer = video_buffer_alloc(bsize);
+    buffer = video_buffer_alloc(bsize, K_NO_WAIT);
     if (buffer == NULL) {
         LOG_ERR("Unable to alloc video buffer");
         return -1;

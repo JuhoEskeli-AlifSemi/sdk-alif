@@ -32,6 +32,8 @@
 #include <arm_mve.h>
 #endif
 
+#include <string.h>
+
 #if !(LV_COLOR_DEPTH == 16 || LV_COLOR_DEPTH == 32)
 #error "Unsupported LV_COLOR_DEPTH"
 #endif
