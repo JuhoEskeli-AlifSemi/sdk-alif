@@ -8,15 +8,6 @@
  *
  */
 
-/ {
-	aliases {
-		i2s-mic = &i2s_rx;
-	};
-};
-
-i2s_rx: &i2s3 {
-	status = "okay";
-};
 
 &ospi1 {
 	bus-speed = <100000000>;

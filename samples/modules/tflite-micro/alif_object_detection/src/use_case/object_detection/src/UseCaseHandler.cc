@@ -75,7 +75,7 @@ static void lvgl_worker_thread(void*, void*, void*)
         //LOG_INF("time: %u", time);
         k_mutex_unlock(&lvgl_mutex);
 		//k_msleep(time);       // TODO: FIX
-        k_msleep(LV_DISP_DEF_REFR_PERIOD);
+        k_msleep(LV_DEF_REFR_PERIOD);
     }
 }
 
