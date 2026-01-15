@@ -86,7 +86,8 @@ extern uint32_t tprof1, tprof2, tprof3, tprof4, tprof5;
 
 namespace {
 lv_style_t boxStyle;
-lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section(".bss.lcd_image_buf")));                      // 448x448x4 = 802,856
+//lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section(".bss.lcd_image_buf")));                      // 192x192x3 = 110,592 bytes
+lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section(".alif_sram0.lcd_image_buf")));                 // 192x192x3 = 110,592 bytes
 };
 
 namespace alif {
