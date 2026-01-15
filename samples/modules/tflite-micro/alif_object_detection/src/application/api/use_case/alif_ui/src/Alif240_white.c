@@ -369,11 +369,13 @@ const LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_ALIF240_W
 };
 
 const lv_img_dsc_t Alif240_white = {
-  .header.cf = LV_IMG_CF_INDEXED_8BIT,
-  .header.always_zero = 0,
-  .header.reserved = 0,
+  .header.magic = LV_IMAGE_HEADER_MAGIC,
+  //.header.cf = LV_IMG_CF_INDEXED_8BIT,
+  .header.cf = LV_COLOR_FORMAT_I8,
+  .header.reserved_2 = 0,
   .header.w = 240,
   .header.h = 87,
+  .header.stride = 240,
   .data_size = 21904,
   .data = Alif240_white_map,
 };
