@@ -84,10 +84,15 @@ extern "C" {
 extern uint32_t tprof1, tprof2, tprof3, tprof4, tprof5;
 }
 
+//#define LCD_BUF_IN_SRAM
+
 namespace {
 lv_style_t boxStyle;
-//lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section(".bss.lcd_image_buf")));                      // 192x192x3 = 110,592 bytes
+#ifndef LCD_BUF_IN_SRAM
+lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section(".bss.lcd_image_buf")));                      // 192x192x3 = 110,592 bytes
+#else
 lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section(".alif_sram1.lcd_image_buf")));                 // 192x192x3 = 110,592 bytes
+#endif
 };
 
 namespace alif {
@@ -112,8 +117,15 @@ namespace app {
            int imgInputCols, int imgInputRows);
 
     bool ObjectDetectionInit()
-    {        
-        LOG_INF("ScreenLayoutInit");
+    {
+        LOG_DBG("ScreenLayoutInit");
+
+        /* zero image data */
+        memset(&lvgl_image[0][0], 0, sizeof(lvgl_image));
+        #ifdef LCD_BUF_IN_SRAM
+        SCB_CleanInvalidateDCache();
+        #endif
+
         ScreenLayoutInit(lvgl_image, sizeof lvgl_image, LIMAGE_X, LIMAGE_Y, LV_ZOOM);
 
         //uint32_t lv_lock_state = lv_port_lock();
@@ -195,16 +207,20 @@ namespace app {
             object_detection::anchor1,
             object_detection::anchor2};
         DetectorPostProcess postProcess =
-            DetectorPostProcess(outputTensor0, outputTensor1, results, postProcessParams);        
+            DetectorPostProcess(outputTensor0, outputTensor1, results, postProcessParams);
 
         const uint8_t *image_data = get_image_data(inputImgCols, inputImgRows);
         if(image_data == NULL) {
             return false;
         }
-                
+
+        #ifdef LCD_BUF_IN_SRAM
+        SCB_CleanDCache();
+        #endif
+
         k_mutex_lock(&lvgl_mutex, K_FOREVER);
         //tprof5 = k_cycle_get_32();
-        /* Display this image on the LCD. */        
+        /* Display this image on the LCD. */
 #ifdef USE_LVGL_ZOOM
         write_to_lvgl_buf(
 #else
@@ -313,8 +329,8 @@ namespace app {
         //hal_lcd_set_text_color(COLOR_GREEN);
 
         /* If profiling is enabled, and the time is valid. */
-        LOG_INF("Final results:");
-        LOG_INF("Total number of inferences: 1");
+        LOG_DBG("Final results:");
+        LOG_DBG("Total number of inferences: 1");
 
         for (uint32_t i = 0; i < results.size(); ++i) {
             LOG_INF("%" PRIu32 ") (%f) -> %s {x=%d,y=%d,w=%d,h=%d}",

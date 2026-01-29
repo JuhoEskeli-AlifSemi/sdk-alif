@@ -176,10 +176,13 @@ void ScreenLayoutInit(const void *imgData, size_t imgSize, int imgWidth, int img
     static lv_img_dsc_t imageDesc;
     imageDesc.data = (const uint8_t *)imgData;
     imageDesc.data_size = imgSize;
-    imageDesc.header.magic = LV_IMAGE_HEADER_MAGIC;    
+    imageDesc.header.magic = LV_IMAGE_HEADER_MAGIC;
     imageDesc.header.reserved_2 = 0;
     //imageDesc.header.cf = LV_IMG_CF_TRUE_COLOR;
-    imageDesc.header.cf = LV_COLOR_FORMAT_RGB565;
+    imageDesc.header.cf = LV_COLOR_FORMAT_NATIVE;
+    //imageDesc.header.cf = LV_COLOR_FORMAT_RGB565;
+
+
     imageDesc.header.w = imgWidth;
     imageDesc.header.reserved_2 = 0;
     // try to use width for stride

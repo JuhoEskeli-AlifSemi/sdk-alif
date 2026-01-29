@@ -65,64 +65,6 @@ static uint8_t raw_image[CIMAGE_X * CIMAGE_Y + CIMAGE_USE_RGB565 * CIMAGE_X * CI
 static const struct device *video_dev;
 struct video_buffer *buffer, *vbuf;
 
-static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
-{
-	int pitch;
-
-	switch (fourcc) {
-	case VIDEO_PIX_FMT_RGB888_PLANAR_PRIVATE:
-	case VIDEO_PIX_FMT_NV24:
-	case VIDEO_PIX_FMT_NV42:
-		pitch = width * 3;
-		break;
-	case VIDEO_PIX_FMT_RGB565:
-	case VIDEO_PIX_FMT_Y10P:
-	case VIDEO_PIX_FMT_BGGR10:
-	case VIDEO_PIX_FMT_GBRG10:
-	case VIDEO_PIX_FMT_GRBG10:
-	case VIDEO_PIX_FMT_RGGB10:
-	case VIDEO_PIX_FMT_BGGR12:
-	case VIDEO_PIX_FMT_GBRG12:
-	case VIDEO_PIX_FMT_GRBG12:
-	case VIDEO_PIX_FMT_RGGB12:
-	case VIDEO_PIX_FMT_BGGR14:
-	case VIDEO_PIX_FMT_GBRG14:
-	case VIDEO_PIX_FMT_GRBG14:
-	case VIDEO_PIX_FMT_RGGB14:
-	case VIDEO_PIX_FMT_BGGR16:
-	case VIDEO_PIX_FMT_GBRG16:
-	case VIDEO_PIX_FMT_GRBG16:
-	case VIDEO_PIX_FMT_RGGB16:
-	case VIDEO_PIX_FMT_Y10:
-	case VIDEO_PIX_FMT_Y12:
-	case VIDEO_PIX_FMT_Y14:
-	case VIDEO_PIX_FMT_YUYV:
-	case VIDEO_PIX_FMT_YVYU:
-	case VIDEO_PIX_FMT_VYUY:
-	case VIDEO_PIX_FMT_UYVY:
-	case VIDEO_PIX_FMT_NV16:
-	case VIDEO_PIX_FMT_NV61:
-	case VIDEO_PIX_FMT_YUV422P:
-		pitch = width << 1;
-		break;
-	case VIDEO_PIX_FMT_NV12:
-	case VIDEO_PIX_FMT_NV21:
-	case VIDEO_PIX_FMT_YUV420:
-	case VIDEO_PIX_FMT_YVU420:
-		pitch = (width * 3) >> 1;
-		break;
-	case VIDEO_PIX_FMT_BGGR8:
-	case VIDEO_PIX_FMT_GBRG8:
-	case VIDEO_PIX_FMT_GRBG8:
-	case VIDEO_PIX_FMT_RGGB8:
-	case VIDEO_PIX_FMT_GREY:
-	default:
-		pitch = width;
-		break;
-	}
-
-	return pitch;
-}
 
 int image_init()
 {
@@ -175,8 +117,6 @@ int image_init()
 		return -1;
 	}
 
-    fmt.pitch = fourcc_to_pitch(fmt.pixelformat, fmt.width);
-
 	ret = video_set_format(video_dev, VIDEO_EP_OUT, &fmt);
 	if (ret) {
 		LOG_ERR("Failed to set video format. ret - %d", ret);
@@ -224,7 +164,7 @@ int image_init()
     }
     */
 
-    //k_msleep(7000);
+    k_msleep(7000);
 
 	LOG_INF("Capture started\n");
     
@@ -358,19 +298,19 @@ const uint8_t *get_image_data(int ml_width, int ml_height)
 #ifndef USE_FAKE_CAMERA
     int ret;
 
-    LOG_INF("video_dequeue");
+    LOG_DBG("video_dequeue");
     ret = video_dequeue(video_dev, VIDEO_EP_OUT, &vbuf, K_FOREVER);
     if (ret) {
         LOG_ERR("Unable to dequeue video buf");
         return NULL;
     }
-    LOG_INF("Got frame");
+    LOG_DBG("Got frame");
 
     uint8_t* raw_image = vbuf->buffer;
 
     SCB_CleanInvalidateDCache();
 
-    LOG_INF("After clceaninvalidate");
+    LOG_DBG("After clceaninvalidate");
 
     //camera_start(CAMERA_MODE_SNAPSHOT);
     //camera_wait(100);
@@ -434,7 +374,7 @@ LOG_INF("CIMAGE_SW_GAIN_CONTROL");
 
     // Cropping and scaling
 #if CIMAGE_USE_RGB565
-LOG_INF("CIMAGE_USE_RGB565");
+    LOG_DBG("CIMAGE_USE_RGB565");
     if ((size_t) ml_width * ml_height * RGB_BYTES > sizeof rgb_image.image_data) {
         LOG_ERR("Requested image does not fit to RGB buffer.");
         return NULL;
@@ -443,7 +383,7 @@ LOG_INF("CIMAGE_USE_RGB565");
                          rgb_image.image_data, ml_width, ml_height,
                          RGB565_BYTES * 8);
 #else
-LOG_INF("!CIMAGE_USE_RGB565");
+    LOG_DBG("!CIMAGE_USE_RGB565");
     if (ml_width > CIMAGE_X || ml_height > CIMAGE_Y) {
         LOG_ERR("Requested image can't be processed in place");
         return NULL;
@@ -455,13 +395,13 @@ LOG_INF("!CIMAGE_USE_RGB565");
     //write_tiff_header(&rgb_image.tiff_header, ml_width, ml_height);
 
 #if CIMAGE_COLOR_CORRECTION
-LOG_INF("CIMAGE_COLOR_CORRECTION");
+    LOG_DBG("CIMAGE_COLOR_CORRECTION");
     //tprof4 = Get_SysTick_Cycle_Count32();
     // Color correction for white balance
     white_balance(ml_width, ml_height, rgb_image.image_data, rgb_image.image_data);
     //tprof4 = Get_SysTick_Cycle_Count32() - tprof4;
 #endif
-LOG_INF("video_enqueue");
+    LOG_DBG("video_enqueue");
     ret = video_enqueue(video_dev, VIDEO_EP_OUT, vbuf);
     if (ret) {
         LOG_ERR("Unable to requeue video buf");
