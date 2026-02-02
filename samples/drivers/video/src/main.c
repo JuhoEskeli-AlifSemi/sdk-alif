@@ -41,6 +41,77 @@ LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 #define NUM_CAMS 1
 #endif /* CONFIG_VIDEO_ALIF_CAM_EXTENDED */
 
+#include <arm_mve.h>
+
+
+// Scale 10-bit (0..1023) stored in uint16_t to full 16-bit (0..65535), in-place.
+//
+// out = round(in * 65535 / 1023)
+//
+// Fixed-point form:
+//   K = round((65535/1023) * 2^16) = 4196353
+//   out = (in*K + 2^15) >> 16
+//
+void scale10_to_16_inplace_mve(uint16_t *buf, size_t n_pixels)
+{
+    const uint16x8_t mask10 = vdupq_n_u16(0x03FFu);
+
+    const uint32_t   K   = 4196353u;
+    const uint32x4_t rnd = vdupq_n_u32(1u << 15);
+
+    size_t i = 0;
+    for (; i + 8 <= n_pixels; i += 8) {
+        // Load 8x u16
+        uint16x8_t v16 = vld1q_u16(&buf[i]);
+
+        // Keep only 10 bits
+        v16 = vandq_u16(v16, mask10);
+
+        // Widen low/high halves to u32x4
+        uint32x4_t lo = vmovlbq_u16(v16);
+        uint32x4_t hi = vmovltq_u16(v16);
+
+        // Multiply by K, add rounding, shift down
+        lo = vaddq_u32(vmulq_n_u32(lo, K), rnd);
+        hi = vaddq_u32(vmulq_n_u32(hi, K), rnd);
+
+        lo = vshrq_n_u32(lo, 16);
+        hi = vshrq_n_u32(hi, 16);
+
+        // Narrow u32 -> u16 and pack into u16x8
+        uint16x8_t out = vdupq_n_u16(0);
+        out = vmovnbq_u32(out, lo);   // pack low  4 lanes
+        out = vmovntq_u32(out, hi);   // pack high 4 lanes
+
+        // Store back in place
+        vst1q_u16(&buf[i], out);
+    }
+
+    // Tail (scalar)
+    for (; i < n_pixels; ++i) {
+        uint32_t v = (uint32_t)(buf[i] & 0x03FFu);
+        uint32_t out = v * K + (1u << 15);
+        buf[i] = (uint16_t)(out >> 16);
+    }
+}
+
+
+// Simplified version: scale 10-bit (0..1023) stored in uint16_t to full 16-bit (0..65535), in-place,
+// by shifting left 6 bits (multiplying by 64). This gives a range of 0..65472.
+static void scale10_to_16_inplace_shift_mve(uint16_t *buf, size_t n_pixels)
+{
+    const uint16x8_t mask10 = vdupq_n_u16(0x03FFu);
+    size_t i = 0;
+
+    for (; i + 8 <= n_pixels; i += 8) {
+        uint16x8_t v = vld1q_u16(&buf[i]);
+        v = vandq_u16(v, mask10);
+        v = vshlq_n_u16(v, 6);
+        vst1q_u16(&buf[i], v);
+    }
+    for (; i < n_pixels; ++i) buf[i] = (uint16_t)((buf[i] & 0x03FFu) << 6);
+}
+
 static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 {
 	int pitch;
@@ -305,6 +376,17 @@ int main(void)
 			return -1;
 		}
 
+		SCB_CleanInvalidateDCache();
+
+		/* scale buffer */
+		#if 0
+		scale10_to_16_inplace_shift_mve((uint16_t *)vbuf->buffer,
+			(fmt.width * fmt.height));
+		#else
+		scale10_to_16_inplace_mve((uint16_t *)vbuf->buffer,
+			(fmt.width * fmt.height));
+		#endif
+
 		LOG_INF("Got frame %u! size: %u; timestamp %u ms",
 		       frame++, vbuf->bytesused, vbuf->timestamp);
 
@@ -370,7 +452,7 @@ static int app_set_parameters(void)
 	sys_set_bits(CGU_CLK_ENA, BIT(23) | BIT(21));
 #endif /* defined (CONFIG_SOC_SERIES_E7) */
 
-	runp.power_domains = PD_SYST_MASK | PD_SSE700_AON_MASK;
+	runp.power_domains = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
 	runp.dcdc_voltage  = 825;
 	runp.dcdc_mode     = DCDC_MODE_PWM;
 	runp.aon_clk_src   = CLK_SRC_LFXO;

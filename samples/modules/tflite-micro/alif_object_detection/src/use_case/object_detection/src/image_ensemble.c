@@ -38,7 +38,9 @@
 #include <zephyr/drivers/video-controls.h>
 #include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(image_ensemble);
+#include <arm_mve.h>
+
+LOG_MODULE_REGISTER(image_ensemble,  LOG_LEVEL_INF);
 
 #define VIDEO_CTRL_CLASS_CAMERA		0x00010000	/**< Camera class controls */
 #define VIDEO_CID_CAMERA_GAIN		(VIDEO_CTRL_CLASS_CAMERA + 1)
@@ -65,6 +67,116 @@ static uint8_t raw_image[CIMAGE_X * CIMAGE_Y + CIMAGE_USE_RGB565 * CIMAGE_X * CI
 static const struct device *video_dev;
 struct video_buffer *buffer, *vbuf;
 
+#include <stdint.h>
+#include <stddef.h>
+#include <arm_mve.h>
+
+// Convert RAW10 stored as uint16 (LSB-aligned, 0..1023) to RAW8 mosaic.
+// dst must have n_pixels bytes.
+static void raw10_u16_to_raw8_mve(const uint16_t *src, uint8_t *dst, size_t n_pixels)
+{
+    const uint16x8_t mask10 = vdupq_n_u16(0x03FFu);
+
+    size_t i = 0;
+    for (; i + 16 <= n_pixels; i += 16) {
+        // Load 16 pixels as two vectors
+        uint16x8_t a = vld1q_u16(&src[i + 0]);
+        uint16x8_t b = vld1q_u16(&src[i + 8]);
+
+        // Keep 10 bits, then map 10->8 by dropping 2 LSBs: (0..1023) -> (0..255)
+        a = vshrq_n_u16(vandq_u16(a, mask10), 2);
+        b = vshrq_n_u16(vandq_u16(b, mask10), 2);
+
+        // Pack/narrow u16 -> u8 into a single uint8x16_t
+        uint8x16_t out = vdupq_n_u8(0);
+        out = vqmovnbq_u16(out, a);  // low  8 bytes from 'a'
+        out = vqmovntq_u16(out, b);  // high 8 bytes from 'b'
+
+        // Store 16 output bytes
+        vst1q_u8(&dst[i], out);
+    }
+
+    // Tail
+    for (; i < n_pixels; ++i) {
+        dst[i] = (uint8_t)((src[i] & 0x03FFu) >> 2);
+    }
+}
+
+
+// Simplified version: scale 10-bit (0..1023) stored in uint16_t to full 16-bit (0..65535), in-place,
+// by shifting left 6 bits (multiplying by 64). This gives a range of 0..65472.
+static void scale10_to_16_inplace_shift_mve(uint16_t *buf, size_t n_pixels)
+{
+    const uint16x8_t mask10 = vdupq_n_u16(0x03FFu);
+    size_t i = 0;
+
+    for (; i + 8 <= n_pixels; i += 8) {
+        uint16x8_t v = vld1q_u16(&buf[i]);
+        v = vandq_u16(v, mask10);
+        v = vshlq_n_u16(v, 6);
+        vst1q_u16(&buf[i], v);
+    }
+    for (; i < n_pixels; ++i) buf[i] = (uint16_t)((buf[i] & 0x03FFu) << 6);
+}
+
+static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
+{
+	int pitch;
+
+	switch (fourcc) {
+	case VIDEO_PIX_FMT_RGB888_PLANAR_PRIVATE:
+	case VIDEO_PIX_FMT_NV24:
+	case VIDEO_PIX_FMT_NV42:
+		pitch = width * 3;
+		break;
+	case VIDEO_PIX_FMT_RGB565:
+	case VIDEO_PIX_FMT_Y10P:
+	case VIDEO_PIX_FMT_BGGR10:
+	case VIDEO_PIX_FMT_GBRG10:
+	case VIDEO_PIX_FMT_GRBG10:
+	case VIDEO_PIX_FMT_RGGB10:
+	case VIDEO_PIX_FMT_BGGR12:
+	case VIDEO_PIX_FMT_GBRG12:
+	case VIDEO_PIX_FMT_GRBG12:
+	case VIDEO_PIX_FMT_RGGB12:
+	case VIDEO_PIX_FMT_BGGR14:
+	case VIDEO_PIX_FMT_GBRG14:
+	case VIDEO_PIX_FMT_GRBG14:
+	case VIDEO_PIX_FMT_RGGB14:
+	case VIDEO_PIX_FMT_BGGR16:
+	case VIDEO_PIX_FMT_GBRG16:
+	case VIDEO_PIX_FMT_GRBG16:
+	case VIDEO_PIX_FMT_RGGB16:
+	case VIDEO_PIX_FMT_Y10:
+	case VIDEO_PIX_FMT_Y12:
+	case VIDEO_PIX_FMT_Y14:
+	case VIDEO_PIX_FMT_YUYV:
+	case VIDEO_PIX_FMT_YVYU:
+	case VIDEO_PIX_FMT_VYUY:
+	case VIDEO_PIX_FMT_UYVY:
+	case VIDEO_PIX_FMT_NV16:
+	case VIDEO_PIX_FMT_NV61:
+	case VIDEO_PIX_FMT_YUV422P:
+		pitch = width << 1;
+		break;
+	case VIDEO_PIX_FMT_NV12:
+	case VIDEO_PIX_FMT_NV21:
+	case VIDEO_PIX_FMT_YUV420:
+	case VIDEO_PIX_FMT_YVU420:
+		pitch = (width * 3) >> 1;
+		break;
+	case VIDEO_PIX_FMT_BGGR8:
+	case VIDEO_PIX_FMT_GBRG8:
+	case VIDEO_PIX_FMT_GRBG8:
+	case VIDEO_PIX_FMT_RGGB8:
+	case VIDEO_PIX_FMT_GREY:
+	default:
+		pitch = width;
+		break;
+	}
+
+	return pitch;
+}
 
 int image_init()
 {
@@ -107,7 +219,6 @@ int image_init()
 			fmt.pixelformat = VIDEO_PIX_FMT_Y10P;
 			fmt.width = fcap->width_min;
 			fmt.height = fcap->height_min;
-			fmt.pitch = fcap->width_min;
 		}
 		i++;
 	}
@@ -116,6 +227,8 @@ int image_init()
 		LOG_ERR("Desired Pixel format is not supported.");
 		return -1;
 	}
+
+    fmt.pitch = fourcc_to_pitch(fmt.pixelformat, fmt.width);
 
 	ret = video_set_format(video_dev, VIDEO_EP_OUT, &fmt);
 	if (ret) {
@@ -295,81 +408,49 @@ static void process_autogain(void)
 const uint8_t *get_image_data(int ml_width, int ml_height)
 {
     extern uint32_t tprof1, tprof2, tprof3, tprof4, tprof5;
-#ifndef USE_FAKE_CAMERA
     int ret;
 
-    LOG_DBG("video_dequeue");
+    LOG_DBG("Before video_dequeue");
     ret = video_dequeue(video_dev, VIDEO_EP_OUT, &vbuf, K_FOREVER);
     if (ret) {
         LOG_ERR("Unable to dequeue video buf");
         return NULL;
     }
-    LOG_DBG("Got frame");
+    LOG_DBG("After video_dequeue");
 
     uint8_t* raw_image = vbuf->buffer;
 
     SCB_CleanInvalidateDCache();
 
-    LOG_DBG("After clceaninvalidate");
+    LOG_DBG("After SCB_CleanInvalidateDCache");
 
-    //camera_start(CAMERA_MODE_SNAPSHOT);
-    //camera_wait(100);
-    // It's a big buffer (313,600 bytes) - actually doing it by address can take 0.175ms, while
-    // a global clean+invalidate is 0.023ms. (Although there will be a reload cost
-    // on stuff we lost).
-    // Notably, just invalidate is faster at 0.015ms, but we'd have to be sure
-    // there were no writeback cacheable areas.
-    // From that Breakeven point for ranged invalidate time = global clean+invalidate would be 43Kbyte.
-    // So maybe go to global if >128K, considering cost of refills?
-    //SCB_InvalidateDCache_by_Addr(raw_image, sizeof raw_image);
-    //SCB_CleanInvalidateDCache();
-#else
-    static int roll = 0;
-    for (int y = 0; y < CIMAGE_Y; y+=2) {
-    	uint8_t *p = raw_image + y * CIMAGE_X;
-    	int bar = (7 * ((y+roll) % CIMAGE_Y)) / CIMAGE_Y + 1;
-    	float barb = bar & 1 ? 255 : 0;
-    	float barr = bar & 2 ? 255 : 0;
-    	float barg = bar & 4 ? 255 : 0;
-    	for (int x = 0; x < CIMAGE_X; x+=2) {
-    		float intensity = x * (1.0f/(CIMAGE_X-2));
-    		float r = barr * intensity + 0.5f;
-    		float g = barg * intensity + 0.5f;
-    		float b = barb * intensity + 0.5f;
-            if (BAYER_FORMAT == DC1394_COLOR_FILTER_BGGR) {
-                p[0]        = b; p[1]            = g;
-                p[CIMAGE_X] = g; p[CIMAGE_X + 1] = r;
-            } else if (BAYER_FORMAT == DC1394_COLOR_FILTER_GRBG) {
-                p[0]        = g; p[1]            = r;
-                p[CIMAGE_X] = b; p[CIMAGE_X + 1] = g;
-            }
-    		p += 2;
-    	}
-    }
-    roll = (roll + 1) % CIMAGE_Y;
-#endif
-
+    /* this should create sensible image for ARX3A0 in 10bit RAW mode */
+    /* TODO check in ZAS 1.5 if the debayering works for 8bit RAW mode */
+    /* TODO: consider other camera configurations */
+    #if 0
+    scale10_to_16_inplace_shift_mve((uint16_t *)raw_image,
+        (CIMAGE_X * CIMAGE_Y));    
+    #else
+    raw10_u16_to_raw8_mve((uint16_t *)raw_image,
+        rgb_image.image_data,
+        (CIMAGE_X * CIMAGE_Y));
+    #endif
+    
+    /* TODO replace with more proper routine */
 #if !CIMAGE_USE_RGB565
-LOG_INF("!CIMAGE_USE_RGB565");
-    /* TIFF image can be dumped in Arm Development Studio using the command
-     *
-     *     dump value camera.tiff rgb_image
-     *
-     * while stopped at an appropriate breakpoint below.
-     */
-    //write_tiff_header(&rgb_image.tiff_header, CIMAGE_X, CIMAGE_Y);
+LOG_DBG("!CIMAGE_USE_RGB565");
     //tprof1 = Get_SysTick_Cycle_Count32();
     // RGB conversion and frame resize
     dc1394_bayer_Simple(raw_image, rgb_image.image_data, CIMAGE_X, CIMAGE_Y, BAYER_FORMAT);
     //tprof1 = Get_SysTick_Cycle_Count32() - tprof1;
 #endif
 
-#ifndef USE_FAKE_CAMERA
+/* disable gain control, cropping & scaling, color correction */
+#if 0
 #if CIMAGE_SW_GAIN_CONTROL
 LOG_INF("CIMAGE_SW_GAIN_CONTROL");
     // Use pixel analysis from bayer_to_RGB to adjust gain
     process_autogain();
-#endif
 #endif
 
     // Cropping and scaling
@@ -391,8 +472,6 @@ LOG_INF("CIMAGE_SW_GAIN_CONTROL");
     crop_and_interpolate(rgb_image.image_data, CIMAGE_X, CIMAGE_Y,
                          rgb_image.image_data, ml_width, ml_height, RGB_BYTES * 8);
 #endif
-    // Rewrite the TIFF header for the new size
-    //write_tiff_header(&rgb_image.tiff_header, ml_width, ml_height);
 
 #if CIMAGE_COLOR_CORRECTION
     LOG_DBG("CIMAGE_COLOR_CORRECTION");
@@ -401,6 +480,10 @@ LOG_INF("CIMAGE_SW_GAIN_CONTROL");
     white_balance(ml_width, ml_height, rgb_image.image_data, rgb_image.image_data);
     //tprof4 = Get_SysTick_Cycle_Count32() - tprof4;
 #endif
+#else
+    /* TODO camera image into LVGL image buffer */
+
+#endif 
     LOG_DBG("video_enqueue");
     ret = video_enqueue(video_dev, VIDEO_EP_OUT, vbuf);
     if (ret) {
