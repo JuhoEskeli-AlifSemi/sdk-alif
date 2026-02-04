@@ -71,6 +71,98 @@ struct video_buffer *buffer, *vbuf;
 #include <stddef.h>
 #include <arm_mve.h>
 
+/*
+ * Input:  buf holds N pixels, each pixel stored as 16-bit little-endian bytes:
+ *           buf[2*i]   = low byte
+ *           buf[2*i+1] = high byte
+ *         only lower 10 bits are valid (0..1023)
+ *
+ * Output: buf[0..N-1] overwritten with RAW8 (0..255), same pixel order.
+ *
+ * Accurate mapping: out8 = round(v10 * 255 / 1023)
+ * Implemented as fixed-point:
+ *   K = round(255*2^16/1023) = 16336
+ *   out8 = (v10*K + 2^15) >> 16
+ */
+void raw10_gray16le_bytes_to_raw8_inplace_mve(uint8_t *buf, size_t n_pixels)
+{
+    uint8_t *dst = buf;
+    const uint8_t *src = buf;
+
+    const uint16x8_t mask10 = vdupq_n_u16(0x03FFu);
+
+    const uint32_t   K   = 16336u;
+    const uint32x4_t rnd = vdupq_n_u32(1u << 15);
+
+    size_t i = 0;
+
+    // 16 pixels per iteration: read 32 bytes, write 16 bytes
+    for (; i + 16 <= n_pixels; i += 16) {
+        const uint8_t *p = src + 2*i;
+
+        // De-interleaving load: even bytes and odd bytes
+        // For LE gray16 stream: even=low byte, odd=high byte
+        uint8x16x2_t lohi = vld2q_u8(p);
+        uint8x16_t loB = lohi.val[0];
+        uint8x16_t hiB = lohi.val[1];
+
+        // Widen to u16 for first 8 pixels and next 8 pixels
+        uint16x8_t lo0 = vmovlbq_u8(loB);
+        uint16x8_t lo1 = vmovltq_u8(loB);
+        uint16x8_t hi0 = vmovlbq_u8(hiB);
+        uint16x8_t hi1 = vmovltq_u8(hiB);
+
+        // Reconstruct uint16 words: w = lo + (hi<<8), then extract 10-bit
+        uint16x8_t v10_0 = vandq_u16(vorrq_u16(lo0, vshlq_n_u16(hi0, 8)), mask10);
+        uint16x8_t v10_1 = vandq_u16(vorrq_u16(lo1, vshlq_n_u16(hi1, 8)), mask10);
+
+        // ---- Accurate scale 8 pixels: v10_0 -> u8 in u16 lanes (0..255) ----
+        uint32x4_t a0 = vmovlbq_u16(v10_0);
+        uint32x4_t a1 = vmovltq_u16(v10_0);
+
+        a0 = vaddq_u32(vmulq_n_u32(a0, K), rnd);
+        a1 = vaddq_u32(vmulq_n_u32(a1, K), rnd);
+
+        a0 = vshrq_n_u32(a0, 16);
+        a1 = vshrq_n_u32(a1, 16);
+
+        uint16x8_t u8as16_0 = vdupq_n_u16(0);
+        u8as16_0 = vmovnbq_u32(u8as16_0, a0);
+        u8as16_0 = vmovntq_u32(u8as16_0, a1);
+
+        // ---- Accurate scale next 8 pixels: v10_1 -> u8 in u16 lanes ----
+        uint32x4_t b0 = vmovlbq_u16(v10_1);
+        uint32x4_t b1 = vmovltq_u16(v10_1);
+
+        b0 = vaddq_u32(vmulq_n_u32(b0, K), rnd);
+        b1 = vaddq_u32(vmulq_n_u32(b1, K), rnd);
+
+        b0 = vshrq_n_u32(b0, 16);
+        b1 = vshrq_n_u32(b1, 16);
+
+        uint16x8_t u8as16_1 = vdupq_n_u16(0);
+        u8as16_1 = vmovnbq_u32(u8as16_1, b0);
+        u8as16_1 = vmovntq_u32(u8as16_1, b1);
+
+        // Pack two u16x8 (0..255) into one u8x16
+        uint8x16_t out = vdupq_n_u8(0);
+        out = vqmovnbq_u16(out, u8as16_0);
+        out = vqmovntq_u16(out, u8as16_1);
+
+        // Store compacted RAW8 to the beginning of the same buffer
+        vst1q_u8(dst + i, out);
+    }
+
+    // Tail (scalar, accurate)
+    for (; i < n_pixels; ++i) {
+        uint16_t w  = (uint16_t)src[2*i] | ((uint16_t)src[2*i + 1] << 8);
+        uint16_t v10 = w & 0x03FFu;
+        uint32_t t = (uint32_t)v10 * 16336u + (1u << 15);
+        dst[i] = (uint8_t)(t >> 16);
+    }
+}
+
+#if 0
 // Convert RAW10 stored as uint16 (LSB-aligned, 0..1023) to RAW8 mosaic.
 // dst must have n_pixels bytes.
 static void raw10_u16_to_raw8_mve(const uint16_t *src, uint8_t *dst, size_t n_pixels)
@@ -102,7 +194,6 @@ static void raw10_u16_to_raw8_mve(const uint16_t *src, uint8_t *dst, size_t n_pi
     }
 }
 
-
 // Simplified version: scale 10-bit (0..1023) stored in uint16_t to full 16-bit (0..65535), in-place,
 // by shifting left 6 bits (multiplying by 64). This gives a range of 0..65472.
 static void scale10_to_16_inplace_shift_mve(uint16_t *buf, size_t n_pixels)
@@ -118,6 +209,7 @@ static void scale10_to_16_inplace_shift_mve(uint16_t *buf, size_t n_pixels)
     }
     for (; i < n_pixels; ++i) buf[i] = (uint16_t)((buf[i] & 0x03FFu) << 6);
 }
+#endif
 
 static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 {
@@ -280,7 +372,7 @@ int image_init()
     k_msleep(7000);
 
 	LOG_INF("Capture started\n");
-    
+
     return 0;
 }
 
@@ -409,7 +501,7 @@ const uint8_t *get_image_data(int ml_width, int ml_height)
 {
     extern uint32_t tprof1, tprof2, tprof3, tprof4, tprof5;
     int ret;
-
+    #if 0 //for loading test images from file
     LOG_DBG("Before video_dequeue");
     ret = video_dequeue(video_dev, VIDEO_EP_OUT, &vbuf, K_FOREVER);
     if (ret) {
@@ -424,18 +516,10 @@ const uint8_t *get_image_data(int ml_width, int ml_height)
 
     LOG_DBG("After SCB_CleanInvalidateDCache");
 
-    /* this should create sensible image for ARX3A0 in 10bit RAW mode */
-    /* TODO check in ZAS 1.5 if the debayering works for 8bit RAW mode */
     /* TODO: consider other camera configurations */
-    #if 0
-    scale10_to_16_inplace_shift_mve((uint16_t *)raw_image,
-        (CIMAGE_X * CIMAGE_Y));    
-    #else
-    raw10_u16_to_raw8_mve((uint16_t *)raw_image,
-        rgb_image.image_data,
+    raw10_gray16le_bytes_to_raw8_inplace_mve(raw_image,
         (CIMAGE_X * CIMAGE_Y));
-    #endif
-    
+
     /* TODO replace with more proper routine */
 #if !CIMAGE_USE_RGB565
 LOG_DBG("!CIMAGE_USE_RGB565");
@@ -445,14 +529,13 @@ LOG_DBG("!CIMAGE_USE_RGB565");
     //tprof1 = Get_SysTick_Cycle_Count32() - tprof1;
 #endif
 
-/* disable gain control, cropping & scaling, color correction */
-#if 0
+#if 0 /* TODO check why gain CID is not working */
 #if CIMAGE_SW_GAIN_CONTROL
 LOG_INF("CIMAGE_SW_GAIN_CONTROL");
     // Use pixel analysis from bayer_to_RGB to adjust gain
     process_autogain();
 #endif
-
+#endif
     // Cropping and scaling
 #if CIMAGE_USE_RGB565
     LOG_DBG("CIMAGE_USE_RGB565");
@@ -480,10 +563,7 @@ LOG_INF("CIMAGE_SW_GAIN_CONTROL");
     white_balance(ml_width, ml_height, rgb_image.image_data, rgb_image.image_data);
     //tprof4 = Get_SysTick_Cycle_Count32() - tprof4;
 #endif
-#else
-    /* TODO camera image into LVGL image buffer */
 
-#endif 
     LOG_DBG("video_enqueue");
     ret = video_enqueue(video_dev, VIDEO_EP_OUT, vbuf);
     if (ret) {
@@ -498,6 +578,6 @@ LOG_INF("CIMAGE_SW_GAIN_CONTROL");
         return NULL;
     }
 
-
+    #endif
     return rgb_image.image_data;
 }
