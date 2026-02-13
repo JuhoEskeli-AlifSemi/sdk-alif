@@ -28,7 +28,7 @@
 #define CIMAGE_X                (560)
 #define CIMAGE_Y                (560)
 #define CIMAGE_COLOR_CORRECTION (1)
-#define CIMAGE_SW_GAIN_CONTROL  (0)
+#define CIMAGE_SW_GAIN_CONTROL  (1)
 #define CIMAGE_RGB_WIDTH_MAX    CIMAGE_X
 #define CIMAGE_RGB_HEIGHT_MAX   CIMAGE_Y
 #define CAM_BAYER_FORMAT        (AIPL_BAYER_GRBG)
