@@ -66,16 +66,6 @@
 	};
 };
 
-&isp {
-	status = "okay";
-
-	port {
-		isp_ep_in: endpoint {
-			remote-endpoint-label = "cam_isp_ep_out";
-		};
-	};
-};
-
 &cam {
 	status = "okay";
 
@@ -94,11 +84,11 @@
 			};
 		};
 
-		/* ISP Interface. */
-		port@2 {
-			reg = <2>;
-			cam_isp_ep_out: endpoint {
-				remote-endpoint-label = "isp_ep_in";
+		/* Video buffer output endpoint. */
+		port@1 {
+			reg = <1>;
+			cam_mem_ep_out: endpoint {
+				remote-endpoint-label = "application";
 			};
 		};
 	};
