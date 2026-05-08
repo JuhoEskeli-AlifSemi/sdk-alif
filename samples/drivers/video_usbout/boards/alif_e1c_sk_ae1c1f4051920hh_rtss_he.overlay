@@ -62,6 +62,8 @@ zephyr_udc0: &usb {
 
 &lpcam {
 	status = "okay";
+	pinctrl-0 = <&pinctrl_lpcam>;
+	pinctrl-names = "default";
 	cpi-interface = "parallel";
 	ports {
 		#address-cells = <1>;
