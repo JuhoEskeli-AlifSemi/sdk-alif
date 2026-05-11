@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.20.0)
+
+# Register MLEK as an extra Zephyr module (until it becomes a proper west module)
+list(APPEND ZEPHYR_EXTRA_MODULES
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../modules/ml-embedded-evaluation-kit_DEV/source/lib/ports/zephyr)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(alif_object_detection)
@@ -15,17 +20,12 @@ zephyr_include_directories(
 	src/aipl/
 )
 
-add_subdirectory(src/math)
-add_subdirectory(src/application/api/common)
-add_subdirectory(src/application/api/use_case/object_detection)
 add_subdirectory(src/application/api/use_case/alif_ui)
 
 target_include_directories(app PRIVATE
     src/application/main/include
     src/use_case/object_detection/include
-    src/application/api/use_case/object_detection/include
     src/generated/object_detection
-    src/application/api/use_case/alif_ui/include
 )
 
 # initialize DSI before LVGL
@@ -48,8 +48,6 @@ target_sources(app PRIVATE src/generated/object_detection/yolo-fastest_192_face_
 endif()
 
 target_link_libraries(app PRIVATE
-    arm_math
-    common_api
-    object_detection_api
+    mlek::object_detection_impl
     alif_ui_api
 )

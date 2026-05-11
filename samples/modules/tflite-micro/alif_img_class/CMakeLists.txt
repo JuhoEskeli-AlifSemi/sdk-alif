@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 cmake_minimum_required(VERSION 3.20.0)
+
+# Register MLEK as an extra Zephyr module (until it becomes a proper west module)
+list(APPEND ZEPHYR_EXTRA_MODULES
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../modules/ml-embedded-evaluation-kit_DEV/source/lib/ports/zephyr)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(alif_img_class)
@@ -15,17 +20,12 @@ zephyr_include_directories(
 	src/aipl/
 )
 
-add_subdirectory(src/math)
-add_subdirectory(src/application/api/common)
-add_subdirectory(src/application/api/use_case/img_class)
 add_subdirectory(src/application/api/use_case/alif_ui)
 
 target_include_directories(app PRIVATE
     src/application/main/include
     src/use_case/alif_img_class/include
-    src/application/api/use_case/img_class/include
     src/generated/img_class
-    src/application/api/use_case/alif_ui/include
 )
 
 # initialize DSI before LVGL
@@ -49,8 +49,6 @@ target_sources(app PRIVATE src/generated/img_class/mobilenet_v2_1.0_224_INT8_vel
 endif()
 
 target_link_libraries(app PRIVATE
-    arm_math
-    common_api
-    img_class_api
+    mlek::img_class_impl
     alif_ui_api
 )
