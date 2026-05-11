@@ -7,6 +7,11 @@
 # contact@alifsemi.com, or visit: https://alifsemi.com/license
 
 cmake_minimum_required(VERSION 3.20.0)
+
+# Register MLEK as an extra Zephyr module (until it becomes a proper west module)
+list(APPEND ZEPHYR_EXTRA_MODULES
+    ${CMAKE_CURRENT_LIST_DIR}/../../../../../modules/ml-embedded-evaluation-kit_DEV/source/lib/ports/zephyr)
+
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
 project(alif_kws)
