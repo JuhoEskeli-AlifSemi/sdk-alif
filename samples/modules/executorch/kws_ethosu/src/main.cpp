@@ -75,22 +75,10 @@ executorch_delegate_EthosUBackend_registered(void);
 /* Boards with SRAM0 (E3/E4/E7/E8): Use dedicated SRAM sections */
 #define ET_TENSOR_ARENA_ATTR __attribute__((section(".alif_sram0.tensor_arena"), aligned(16)))
 #define ET_ETHOSU_SCRATCH_ATTR __attribute__((section(".alif_sram0.ethosu_scratch"), aligned(16)))
-#if !defined(ET_ARM_METHOD_ALLOCATOR_POOL_SIZE)
-#define ET_ARM_METHOD_ALLOCATOR_POOL_SIZE (1572864)  /* 1.5MB for boards with SRAM */
-#endif
-#if !defined(ET_ARM_BAREMETAL_SCRATCH_TEMP_ALLOCATOR_POOL_SIZE)
-#define ET_ARM_BAREMETAL_SCRATCH_TEMP_ALLOCATOR_POOL_SIZE (1572864)  /* 1.5MB */
-#endif
 #else
-/* Boards without SRAM0 (E1C, B1): Use DTCM with smaller pools */
+/* Boards without SRAM0 (E1C, B1): Use default BSS placement in DTCM */
 #define ET_TENSOR_ARENA_ATTR __attribute__((aligned(16)))
 #define ET_ETHOSU_SCRATCH_ATTR __attribute__((aligned(16)))
-#if !defined(ET_ARM_METHOD_ALLOCATOR_POOL_SIZE)
-#define ET_ARM_METHOD_ALLOCATOR_POOL_SIZE (65536)  /* 64KB for DTCM-only boards */
-#endif
-#if !defined(ET_ARM_BAREMETAL_SCRATCH_TEMP_ALLOCATOR_POOL_SIZE)
-#define ET_ARM_BAREMETAL_SCRATCH_TEMP_ALLOCATOR_POOL_SIZE (65536)  /* 64KB */
-#endif
 #endif
 
 #if !defined(ET_ARM_BAREMETAL_FAST_SCRATCH_TEMP_ALLOCATOR_POOL_SIZE)
