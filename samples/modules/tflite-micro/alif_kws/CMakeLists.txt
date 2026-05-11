@@ -17,14 +17,9 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-psabi")
 
 set(PLATFORM_DRIVERS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/hal/source/platform/zephyr)
 
-add_subdirectory(src/math)
-add_subdirectory(src/application/api/common)
-add_subdirectory(src/application/api/use_case/kws)
-
 target_include_directories(app PRIVATE
     src/application/main/include
     src/use_case/alif_kws/include
-    src/application/api/use_case/kws/include
     src/generated/kws
 )
 
@@ -49,7 +44,5 @@ target_sources(app PRIVATE src/generated/kws/kws_micronet_m_vela_H128.tflite.cc)
 endif()
 
 target_link_libraries(app PRIVATE
-    arm_math
-    common_api
-    kws_api
+    mlek::kws_impl
 )
