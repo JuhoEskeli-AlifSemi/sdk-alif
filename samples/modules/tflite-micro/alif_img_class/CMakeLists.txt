@@ -28,9 +28,9 @@ add_subdirectory(src/application/api/use_case/alif_ui)
 # Build-time model and labels generation from MLEK resources
 # ---------------------------------------------------------------------------
 set(MLEK_SCRIPTS_DIR ${MLEK_ROOT}/scripts)
-set(PYTHON ${Python3_EXECUTABLE})
 set(RESOURCES_PATH ${MLEK_ROOT}/resources_downloaded CACHE PATH
     "Path to MLEK resources (models compiled with Vela)")
+setup_source_generator()
 
 # Source generation output directories
 set(SRC_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/src)
