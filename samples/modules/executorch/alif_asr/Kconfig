@@ -1,0 +1,58 @@
+# Copyright (C) 2025 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+config ACTIVATION_BUF_SECTION
+	string "Linker section for the activation buffer (tensor arena)"
+	default ".bss.activation_buf"
+
+config ACTIVATION_BUF_SZ
+	hex "Tensor arena size"
+	default 0x108000
+
+config MODEL_IN_EXT_FLASH
+	bool "Put ML model to external flash"
+	select FLASH
+	select ALIF_OSPI_FLASH_XIP
+	help
+	  Initialize OSPI controller to XIP mode and link ML model data to
+	  external flash address space.
+
+config MODEL_SECTION
+	string "Linker section where ML model is placed"
+	depends on !MODEL_IN_EXT_FLASH
+	default ".rodata.et_model"
+
+config AUDIO_CHANNELS
+	int "Number of input audio channels"
+	default 2
+
+config SAMPLE_CNT
+	int "Number of samples per I2S slab buffer block"
+	default 512
+
+config NUM_BUFFERS
+	int "Number of slab buffers to allocate"
+	default 4
+
+config I2S_GAIN
+	int "Fixed linear gain applied to I2S samples (e.g. 10 = 20 dB)"
+	default 10
+
+config AUDIO_STRIDE
+	int "Stride used for the BUILD_ASSERT divisibility check"
+	default 2048
+
+config THREAD_STACK_SIZE
+	int "Stack size of the audio worker thread"
+	default 1024
+
+config THREAD_PRIORITY
+	int "Priority of the audio worker thread"
+	default 0
+
+source "Kconfig.zephyr"
