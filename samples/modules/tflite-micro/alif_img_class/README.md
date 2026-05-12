@@ -32,6 +32,7 @@ Pass `ov5675.conf` via `-DOVERLAY_CONFIG` to set the required buffer pool size (
 Before building, set up the MLEK resources (downloads and Vela-compiles the ML models):
 ```
 west config manifest.group-filter -- +optional
+west config manifest.project-filter -- +ml-embedded-evaluation-kit
 west update
 python3 modules/ml-embedded-evaluation-kit_DEV/set_up_default_resources.py
 ```

@@ -1,0 +1,19 @@
+# ml-embedded-evaluation-kit module manifest for Zephyr RTOS
+# This file enables fetching the ml-embedded-evaluation-kit module using west
+# Usage:
+#   west config manifest.project-filter -- +ml-embedded-evaluation-kit
+#   west update
+
+manifest:
+  remotes:
+    - name: alifsemidev
+      url-base: org-115832732@github.com:AlifSemiDev
+
+  projects:
+    - name: ml-embedded-evaluation-kit
+      remote: alifsemidev
+      repo-path: ml-embedded-evaluation-kit_DEV
+      revision: d2b72c38486e36e348ea78cd67bf345b1c15aeb6
+      path: modules/ml-embedded-evaluation-kit_DEV
+      groups:
+        - ml-embedded-evaluation-kit

@@ -24,6 +24,7 @@ To build the sample, you first need to pull in the optional dependencies and set
 .. code-block:: console
 
    west config manifest.group-filter -- +optional
+   west config manifest.project-filter -- +ml-embedded-evaluation-kit
    west update
    python3 modules/ml-embedded-evaluation-kit_DEV/set_up_default_resources.py
 
