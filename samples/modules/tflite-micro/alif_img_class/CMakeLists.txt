@@ -3,9 +3,11 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
-# Register MLEK as an extra Zephyr module (until it becomes a proper west module)
-list(APPEND ZEPHYR_EXTRA_MODULES
-    ${CMAKE_CURRENT_LIST_DIR}/../../../../../modules/ml-embedded-evaluation-kit_DEV/source/lib/ports/zephyr)
+# MLEK root (until it becomes a proper west module)
+set(MLEK_ROOT ${CMAKE_CURRENT_LIST_DIR}/../../../../../modules/ml-embedded-evaluation-kit_DEV)
+
+# Register MLEK as an extra Zephyr module
+list(APPEND ZEPHYR_EXTRA_MODULES ${MLEK_ROOT}/source/lib/ports/zephyr)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 
@@ -22,10 +24,63 @@ zephyr_include_directories(
 
 add_subdirectory(src/application/api/use_case/alif_ui)
 
+# ---------------------------------------------------------------------------
+# Build-time model and labels generation from MLEK resources
+# ---------------------------------------------------------------------------
+set(MLEK_SCRIPTS_DIR ${MLEK_ROOT}/scripts)
+set(PYTHON ${Python3_EXECUTABLE})
+set(RESOURCES_PATH ${MLEK_ROOT}/resources_downloaded CACHE PATH
+    "Path to MLEK resources (models compiled with Vela)")
+
+# Source generation output directories
+set(SRC_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/src)
+set(INC_GEN_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated/include)
+file(MAKE_DIRECTORY ${SRC_GEN_DIR} ${INC_GEN_DIR})
+
+# Determine NPU config ID based on Zephyr Kconfig
+if (CONFIG_ARM_ETHOS_U55_256)
+    set(ETHOS_U_NPU_CONFIG_ID "H256")
+else()
+    set(ETHOS_U_NPU_CONFIG_ID "H128")
+endif()
+
+# Model file path
+set(IMG_CLASS_MODEL_PATH ${RESOURCES_PATH}/img_class/mobilenet_v2_1.0_224_INT8_vela_${ETHOS_U_NPU_CONFIG_ID}.tflite
+    CACHE FILEPATH "Path to the image classification TFLite model (Vela-compiled)")
+
+if (NOT EXISTS ${IMG_CLASS_MODEL_PATH})
+    message(FATAL_ERROR
+        "Image classification model not found at ${IMG_CLASS_MODEL_PATH}\n"
+        "Run set_up_default_resources.py first:\n"
+        "  python3 ${MLEK_ROOT}/set_up_default_resources.py\n")
+endif()
+
+# Generate model C array (no extra model code expressions for img_class TFLM)
+generate_model_code(
+    MODEL_PATH  ${IMG_CLASS_MODEL_PATH}
+    DESTINATION ${SRC_GEN_DIR}
+    NAMESPACE   "arm" "app" "img_class"
+)
+
+# Generate labels C++ code
+set(IMG_CLASS_LABELS_FILE ${MLEK_ROOT}/resources/img_class/labels/labels_mobilenet_v2_1.0_224.txt)
+
+generate_labels_code(
+    INPUT           ${IMG_CLASS_LABELS_FILE}
+    DESTINATION_SRC ${SRC_GEN_DIR}
+    DESTINATION_HDR ${INC_GEN_DIR}
+    OUTPUT_FILENAME Labels
+)
+
+# Collect the generated source files
+file(GLOB IMG_CLASS_GENERATED_SOURCES ${SRC_GEN_DIR}/*.cc)
+
+# ---------------------------------------------------------------------------
+
 target_include_directories(app PRIVATE
     src/application/main/include
     src/use_case/alif_img_class/include
-    src/generated/img_class
+    ${INC_GEN_DIR}
 )
 
 # initialize DSI before LVGL
@@ -37,16 +92,10 @@ target_sources(app PRIVATE
     src/application/main/Main.cc
     src/use_case/alif_img_class/src/MainLoop.cc
     src/use_case/alif_img_class/src/UseCaseHandler.cc
-    src/generated/img_class/Labels.cc
     src/use_case/alif_img_class/src/image_ensemble.c
     src/use_case/alif_img_class/src/image_processing.c
+    ${IMG_CLASS_GENERATED_SOURCES}
 )
-
-if (CONFIG_ARM_ETHOS_U55_256)
-target_sources(app PRIVATE src/generated/img_class/mobilenet_v2_1.0_224_INT8_vela_H256.tflite.cc)
-else()
-target_sources(app PRIVATE src/generated/img_class/mobilenet_v2_1.0_224_INT8_vela_H128.tflite.cc)
-endif()
 
 target_link_libraries(app PRIVATE
     mlek::img_class_impl

@@ -28,6 +28,15 @@ frames.
 
 Pass `ov5675.conf` via `-DOVERLAY_CONFIG` to set the required buffer pool size (see build commands below).
 
+## Prerequisites
+Before building, set up the MLEK resources (downloads and Vela-compiles the ML models):
+```
+west config manifest.group-filter -- +optional
+west update
+python3 modules/ml-embedded-evaluation-kit_DEV/set_up_default_resources.py
+```
+The model and labels source code is generated automatically at CMake configure time.
+
 ## Building and running: E7-DK
 Build
 ```
