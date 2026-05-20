@@ -10,6 +10,7 @@
 #include <soc_common.h>
 #include <se_service.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/cache.h>
 
 #include <zephyr/drivers/video/video_alif.h>
 #include <zephyr/drivers/video/isp-vsi.h>
@@ -27,13 +28,18 @@ LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 #define N_FRAMES		10
 #endif
 #define N_VID_BUFF              MIN(CONFIG_VIDEO_BUFFER_POOL_NUM_MAX, N_FRAMES)
+/* JPEG capture buffer size. Keep in sync with CONFIG_VIDEO_BUFFER_POOL_SZ_MAX
+ * in the board .conf file, which must be this value plus ~1 KB for k_heap
+ * block headers / alignment overhead.
+ */
+#define JPEG_CAPTURE_MAX_BYTES (420U * 1024U)
 
 #define ISP_ENABLED DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(isp))
 
 #ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
 #define PIPELINE_FORMAT	VIDEO_PIX_FMT_BGGR8
 #elif CONFIG_DT_HAS_OVTI_OV5640_ENABLED
-#define PIPELINE_FORMAT	VIDEO_PIX_FMT_RGB565
+#define PIPELINE_FORMAT	VIDEO_PIX_FMT_JPEG
 #else
 #define PIPELINE_FORMAT	VIDEO_PIX_FMT_Y10P
 #endif /* CONFIG_DT_HAS_HIMAX_HM0360_ENABLED */
@@ -111,6 +117,10 @@ static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 	case VIDEO_PIX_FMT_YUV420:
 	case VIDEO_PIX_FMT_YVU420:
 		pitch = (width * 3) >> 1;
+		break;
+	case VIDEO_PIX_FMT_JPEG:
+		/* JPEG is compressed, pitch is not used to size the final frame buffer. */
+		pitch = width;
 		break;
 	case VIDEO_PIX_FMT_BGGR8:
 	case VIDEO_PIX_FMT_GBRG8:
@@ -218,8 +228,8 @@ int main(void)
 					fmt.width = 320;
 					fmt.height = 240;
 				} else if (IS_ENABLED(CONFIG_DT_HAS_OVTI_OV5640_ENABLED)) {
-					fmt.width = 160;
-					fmt.height = 120;
+					fmt.width = 2592;
+					fmt.height = 1944;
 				} else {
 					fmt.width = fcap->width_min;
 					fmt.height = fcap->height_min;
@@ -278,7 +288,15 @@ int main(void)
 	       fmt.width, fmt.height);
 
 	/* Size to allocate for each buffer */
-	bsize = fmt.pitch * fmt.height;
+	if (fmt.pixelformat == VIDEO_PIX_FMT_JPEG) {
+		/*
+		 * Bound JPEG capture buffer to avoid allocating an uncompressed-sized frame.
+		 * Tune this value if your quality settings produce larger compressed frames.
+		 */
+		bsize = MIN((size_t)JPEG_CAPTURE_MAX_BYTES, (size_t)fmt.width * fmt.height);
+	} else {
+		bsize = fmt.pitch * fmt.height;
+	}
 
 	LOG_INF("Width - %d, Pitch - %d, Height - %d, Buff size - %d",
 			fmt.width, fmt.pitch, fmt.height, bsize);
@@ -344,6 +362,102 @@ int main(void)
 
 	LOG_INF("Capture started");
 
+#ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
+	/*
+	 * JPEG capture: the CPI driver stops capture on the 2nd VSYNC
+	 * (end-of-frame) and moves the buffer to fifo_out.  We block on
+	 * video_dequeue until that happens, then scan the buffer once
+	 * for the JPEG EOI marker to determine the actual compressed size.
+	 *
+	 * To avoid false-matching an EOI inside an EXIF thumbnail, we
+	 * parse past the SOS (Start of Scan) marker and only scan the
+	 * entropy-coded data.  JPEG byte-stuffing guarantees 0xFF 0xD9
+	 * cannot appear as a false positive within compressed data.
+	 */
+	ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
+	if (ret) {
+		LOG_ERR("Unable to dequeue video buf: %d", ret);
+		return -1;
+	}
+	LOG_INF("Frame captured, scanning for JPEG EOI...");
+
+	{
+		uint8_t *buf = vbuf->buffer;
+		int jpeg_size = -1;
+		int scan_from = 2;
+
+		/* Verify SOI marker (0xFF 0xD8) */
+		if (buf[0] != 0xFF || buf[1] != 0xD8) {
+			LOG_ERR("No JPEG SOI marker (got %02x %02x)",
+				buf[0], buf[1]);
+			return -1;
+		}
+
+		/* Parse marker segments to skip past SOS (0xFF 0xDA) */
+		{
+			int pos = 2;
+
+			while (pos < (int)bsize - 3) {
+				if (buf[pos] != 0xFF) {
+					break;
+				}
+				uint8_t marker = buf[pos + 1];
+
+				if (marker == 0xDA) {
+					uint16_t seg_len =
+						((uint16_t)buf[pos + 2] << 8)
+						| buf[pos + 3];
+					scan_from = pos + 2 + seg_len;
+					break;
+				}
+				/* Standalone markers (no length field) */
+				if (marker == 0x00 || marker == 0x01 ||
+				    (marker >= 0xD0 && marker <= 0xD9)) {
+					pos += 2;
+					continue;
+				}
+				/* Variable-length marker — skip */
+				uint16_t seg_len =
+					((uint16_t)buf[pos + 2] << 8)
+					| buf[pos + 3];
+				pos += 2 + seg_len;
+			}
+		}
+
+		/* Scan entropy data for EOI marker (0xFF 0xD9) */
+		for (int j = scan_from; j < (int)bsize - 1; j++) {
+			if (buf[j] == 0xFF && buf[j + 1] == 0xD9) {
+				jpeg_size = j + 2;
+				break;
+			}
+		}
+
+		if (jpeg_size > 0) {
+			LOG_INF("JPEG EOI at offset %d (%d KB)",
+				jpeg_size, jpeg_size / 1024);
+			vbuf->bytesused = jpeg_size;
+		} else {
+			LOG_ERR("JPEG EOI not found in %zu byte buffer", bsize);
+			LOG_INF("First 16 bytes: %02x %02x %02x %02x %02x %02x "
+				"%02x %02x %02x %02x %02x %02x %02x %02x "
+				"%02x %02x",
+				buf[0], buf[1], buf[2], buf[3],
+				buf[4], buf[5], buf[6], buf[7],
+				buf[8], buf[9], buf[10], buf[11],
+				buf[12], buf[13], buf[14], buf[15]);
+			return -1;
+		}
+	}
+
+	LOG_INF("Got frame! size: %u bytes, timestamp: %u ms",
+		vbuf->bytesused, vbuf->timestamp);
+
+	video_flush(video, VIDEO_EP_OUT, false);
+	ret = video_stream_stop(video);
+	if (ret) {
+		LOG_ERR("Unable to stop capture: %d", ret);
+	}
+#else
 	for (int i = 0; i < N_FRAMES; i++) {
 		ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
 		if (ret) {
@@ -388,17 +502,14 @@ int main(void)
 		LOG_ERR("Unable to stop capture (interface). ret - %d", ret);
 		return -1;
 	}
+#endif
 
 	return 0;
 }
 
-/*
- * Do application configurations.
- */
 static int app_set_parameters(void)
 {
-#if (CONFIG_VIDEO_MIPI_CSI2_DW)
-	run_profile_t runp;
+	run_profile_t runp = { 0 };
 	int ret;
 
 #if (DT_NODE_HAS_STATUS(DT_NODELABEL(camera_select), okay))
@@ -407,14 +518,7 @@ static int app_set_parameters(void)
 
 	gpio_pin_configure_dt(&sel, GPIO_OUTPUT);
 	gpio_pin_set_dt(&sel, 1);
-#endif /* (DT_NODE_HAS_STATUS(DT_NODELABEL(camera_sensor), okay)) */
-
-	/* Enable HFOSC (38.4 MHz) and CFG (100 MHz) clock. */
-#if defined(CONFIG_SOC_SERIES_E8)
-	sys_set_bits(CGU_CLK_ENA, BIT(23) | BIT(7));
-#else
-	sys_set_bits(CGU_CLK_ENA, BIT(23) | BIT(21));
-#endif /* defined (CONFIG_SOC_SERIES_E7) */
+#endif
 
 	runp.power_domains = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
 	runp.dcdc_voltage  = 825;
@@ -434,30 +538,16 @@ static int app_set_parameters(void)
 #endif
 
 	runp.phy_pwr_gating |= MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK |
-		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK;
-	runp.ip_clock_gating = CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK;
+		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK | USB_PHY_MASK;
+	runp.ip_clock_gating = CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK | USB_MASK;
 
 	ret = se_service_set_run_cfg(&runp);
 	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);
 
-	/*
-	 * CPI Pixel clock - Generate XVCLK. Used by ARX3A0
-	 * TODO: parse this clock from DTS and set on board from camera
-	 * controller driver.
-	 */
-	sys_write32(0x140001, CLKCTRL_PER_MST_CAMERA_PIXCLK_CTRL);
-#endif
-
 #if (DT_NODE_HAS_STATUS(DT_NODELABEL(lpcam), okay))
-	/* Enable LPCAM controller Pixel Clock (XVCLK). */
-	/*
-	 * Not needed for the time being as LP-CAM supports only
-	 * parallel data-mode of cature and only MT9M114 sensor is
-	 * tested with parallel data capture which generates clock
-	 * internally. But can be used to generate XVCLK from LP CAM
-	 * controller.
-	 * sys_write32(0x140001, M55HE_CFG_HE_CAMERA_PIXCLK);
-	 */
+
+	sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
+
 #if CONFIG_DT_HAS_OVTI_OV5640_ENABLED
 	const struct gpio_dt_spec cam_enbuf =
 		GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enbuf_gpios);

@@ -21,14 +21,17 @@ manifest:
       url-base: https://github.com/zephyrproject-rtos
     - name: armmbed
       url-base: https://github.com/ARMmbed
+    - name: juho
+      url-base: https://github.com/JuhoEskeli-AlifSemi
 
   #
   # Please add items below based on alphabetical order
   projects:
 
     - name: zephyr
+      remote: juho
       repo-path: zephyr_alif
-      revision: 79c4c07c145348229bf38894c826cb318d5837b5
+      revision: 76c7167b191b5d82e819312338b71f409254a3e6
       import:
         # In addition to the zephyr repository itself,
         # Alif SDK fetches the needed projects
