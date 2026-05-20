@@ -15,6 +15,7 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/video.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/cache.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/usb/class/usbd_msc.h>
 #include <zephyr/fs/fs.h>
@@ -38,7 +39,7 @@ LOG_MODULE_REGISTER(video_usbout, LOG_LEVEL_INF);
 #ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
 #define PIPELINE_FORMAT	VIDEO_PIX_FMT_BGGR8
 #elif CONFIG_DT_HAS_OVTI_OV5640_ENABLED
-#define PIPELINE_FORMAT	VIDEO_PIX_FMT_RGB565
+#define PIPELINE_FORMAT	VIDEO_PIX_FMT_JPEG
 #else
 #define PIPELINE_FORMAT	VIDEO_PIX_FMT_Y10P
 #endif
@@ -83,6 +84,9 @@ static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 	case VIDEO_PIX_FMT_YUV420:
 	case VIDEO_PIX_FMT_YVU420:
 		return (width * 3) >> 1;
+	case VIDEO_PIX_FMT_JPEG:
+		/* For JPEG, use full uncompressed size as max buffer */
+		return width * 2;
 	case VIDEO_PIX_FMT_BGGR8:
 	case VIDEO_PIX_FMT_GBRG8:
 	case VIDEO_PIX_FMT_GRBG8:
@@ -103,14 +107,15 @@ static const char *fourcc_str(uint32_t fourcc, char buf[5])
 	return buf;
 }
 
-static int write_capture_to_file(struct video_buffer *vbuf, int index)
+static int write_capture_to_file(struct video_buffer *vbuf, int index,
+				 const char *ext)
 {
 	struct fs_file_t file;
 	char path[32];
 	ssize_t written;
 	int ret;
 
-	snprintf(path, sizeof(path), "/RAM:/cap_%d.bin", index);
+	snprintf(path, sizeof(path), "/RAM:/cap_%d.%s", index, ext);
 
 	fs_file_t_init(&file);
 	ret = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
@@ -257,6 +262,63 @@ int main(void)
 	}
 	LOG_INF("Capture started, waiting for frame...");
 
+#ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
+	/*
+	 * JPEG capture: CPI is configured for worst-case frame size.
+	 * Poll the buffer for JPEG EOI marker (0xFF 0xD9), then
+	 * stop the CPI via flush+stop. The JPEG compressed size is
+	 * determined by the EOI position.
+	 */
+	{
+		uint8_t *buf = buffers[0]->buffer;
+		int jpeg_size = -1;
+		int poll_count = 0;
+		const int max_polls = 500; /* 5 seconds max */
+
+		LOG_INF("Polling buffer for JPEG EOI marker...");
+
+		while (jpeg_size < 0 && poll_count < max_polls) {
+			k_msleep(10);
+			poll_count++;
+
+			/* Invalidate cache to see DMA-written data */
+			sys_cache_data_invd_range(buf, bsize);
+
+			if (poll_count % 50 == 0) {
+				LOG_INF("Poll %d: first bytes: %02x %02x %02x %02x",
+					poll_count, buf[0], buf[1], buf[2], buf[3]);
+			}
+
+			/* Scan for EOI marker (0xFF 0xD9) */
+			for (int j = 0; j < (int)bsize - 1; j++) {
+				if (buf[j] == 0xFF && buf[j + 1] == 0xD9) {
+					jpeg_size = j + 2;
+					break;
+				}
+			}
+		}
+
+		/* Stop CPI: flush cancel moves buffer to out-fifo, then stop */
+		LOG_INF("Stopping CPI capture...");
+		video_flush(video, VIDEO_EP_OUT, true);
+		video_stream_stop(video);
+
+		if (jpeg_size > 0) {
+			LOG_INF("JPEG EOI found at offset %d", jpeg_size);
+			buffers[0]->bytesused = jpeg_size;
+			vbuf = buffers[0];
+		} else {
+			LOG_ERR("JPEG EOI not found after %d polls", poll_count);
+			LOG_INF("First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
+				"%02x %02x %02x %02x %02x %02x %02x %02x",
+				buf[0], buf[1], buf[2], buf[3],
+				buf[4], buf[5], buf[6], buf[7],
+				buf[8], buf[9], buf[10], buf[11],
+				buf[12], buf[13], buf[14], buf[15]);
+			return -1;
+		}
+	}
+#else
 	/* Dequeue one frame */
 	ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
 	if (ret) {
@@ -272,6 +334,7 @@ int main(void)
 	if (ret) {
 		LOG_ERR("Unable to stop capture: %d", ret);
 	}
+#endif
 
 	/* Mount FAT filesystem on RAM disk */
 	ret = fs_mount(&fs_mnt);
@@ -282,7 +345,9 @@ int main(void)
 	LOG_INF("FAT filesystem mounted on %s", fs_mnt.mnt_point);
 
 	/* Write captured frame to file */
-	ret = write_capture_to_file(vbuf, 0);
+	const char *file_ext = (fmt.pixelformat == VIDEO_PIX_FMT_JPEG) ? "jpg" : "bin";
+
+	ret = write_capture_to_file(vbuf, 0, file_ext);
 	if (ret) {
 		LOG_ERR("Failed to write capture file");
 		return -1;
@@ -304,8 +369,8 @@ int main(void)
 	}
 
 	LOG_INF("USB mass storage enabled. Connect USB to read captured image.");
-	LOG_INF("The file 'cap_0.bin' contains the raw %s %ux%u image.",
-		fourcc_str(fmt.pixelformat, fcc), fmt.width, fmt.height);
+	LOG_INF("The file 'cap_0.%s' contains the %s %ux%u image.",
+		file_ext, fourcc_str(fmt.pixelformat, fcc), fmt.width, fmt.height);
 
 	return 0;
 }
