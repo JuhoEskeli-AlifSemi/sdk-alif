@@ -33,7 +33,7 @@ LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 #ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
 #define PIPELINE_FORMAT	VIDEO_PIX_FMT_BGGR8
 #elif CONFIG_DT_HAS_OVTI_OV5640_ENABLED
-#define PIPELINE_FORMAT	VIDEO_PIX_FMT_RGB565
+#define PIPELINE_FORMAT	VIDEO_PIX_FMT_JPEG
 #else
 #define PIPELINE_FORMAT	VIDEO_PIX_FMT_Y10P
 #endif /* CONFIG_DT_HAS_HIMAX_HM0360_ENABLED */
@@ -111,6 +111,10 @@ static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 	case VIDEO_PIX_FMT_YUV420:
 	case VIDEO_PIX_FMT_YVU420:
 		pitch = (width * 3) >> 1;
+		break;
+	case VIDEO_PIX_FMT_JPEG:
+		/* For JPEG, use full uncompressed size as max buffer */
+		pitch = width * 2;
 		break;
 	case VIDEO_PIX_FMT_BGGR8:
 	case VIDEO_PIX_FMT_GBRG8:
@@ -354,6 +358,21 @@ int main(void)
 		LOG_INF("Got frame %u! size: %u; timestamp %u ms",
 		       frame++, vbuf->bytesused, vbuf->timestamp);
 
+#ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
+		/* For JPEG, verify SOI marker and log first bytes */
+		if (vbuf->bytesused >= 2) {
+			uint8_t *data = vbuf->buffer;
+
+			LOG_INF("JPEG header: %02x %02x %02x %02x %02x %02x",
+				data[0], data[1], data[2], data[3], data[4], data[5]);
+			if (data[0] == 0xFF && data[1] == 0xD8) {
+				LOG_INF("Valid JPEG SOI marker detected");
+			} else {
+				LOG_WRN("No JPEG SOI marker found!");
+			}
+		}
+#endif
+
 		if (last_timestamp == 0) {
 			LOG_INF("FPS: 0.0");
 			last_timestamp = vbuf->timestamp;
@@ -392,13 +411,9 @@ int main(void)
 	return 0;
 }
 
-/*
- * Do application configurations.
- */
 static int app_set_parameters(void)
 {
-#if (CONFIG_VIDEO_MIPI_CSI2_DW)
-	run_profile_t runp;
+	run_profile_t runp = { 0 };
 	int ret;
 
 #if (DT_NODE_HAS_STATUS(DT_NODELABEL(camera_select), okay))
@@ -407,14 +422,7 @@ static int app_set_parameters(void)
 
 	gpio_pin_configure_dt(&sel, GPIO_OUTPUT);
 	gpio_pin_set_dt(&sel, 1);
-#endif /* (DT_NODE_HAS_STATUS(DT_NODELABEL(camera_sensor), okay)) */
-
-	/* Enable HFOSC (38.4 MHz) and CFG (100 MHz) clock. */
-#if defined(CONFIG_SOC_SERIES_E8)
-	sys_set_bits(CGU_CLK_ENA, BIT(23) | BIT(7));
-#else
-	sys_set_bits(CGU_CLK_ENA, BIT(23) | BIT(21));
-#endif /* defined (CONFIG_SOC_SERIES_E7) */
+#endif
 
 	runp.power_domains = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
 	runp.dcdc_voltage  = 825;
@@ -434,30 +442,16 @@ static int app_set_parameters(void)
 #endif
 
 	runp.phy_pwr_gating |= MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK |
-		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK;
-	runp.ip_clock_gating = CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK;
+		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK | USB_PHY_MASK;
+	runp.ip_clock_gating = CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK | USB_MASK;
 
 	ret = se_service_set_run_cfg(&runp);
 	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);
 
-	/*
-	 * CPI Pixel clock - Generate XVCLK. Used by ARX3A0
-	 * TODO: parse this clock from DTS and set on board from camera
-	 * controller driver.
-	 */
-	sys_write32(0x140001, CLKCTRL_PER_MST_CAMERA_PIXCLK_CTRL);
-#endif
-
 #if (DT_NODE_HAS_STATUS(DT_NODELABEL(lpcam), okay))
-	/* Enable LPCAM controller Pixel Clock (XVCLK). */
-	/*
-	 * Not needed for the time being as LP-CAM supports only
-	 * parallel data-mode of cature and only MT9M114 sensor is
-	 * tested with parallel data capture which generates clock
-	 * internally. But can be used to generate XVCLK from LP CAM
-	 * controller.
-	 * sys_write32(0x140001, M55HE_CFG_HE_CAMERA_PIXCLK);
-	 */
+
+	sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
+
 #if CONFIG_DT_HAS_OVTI_OV5640_ENABLED
 	const struct gpio_dt_spec cam_enbuf =
 		GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enbuf_gpios);
