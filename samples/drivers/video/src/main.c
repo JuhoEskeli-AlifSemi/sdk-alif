@@ -10,6 +10,7 @@
 #include <soc_common.h>
 #include <se_service.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/cache.h>
 
 #include <zephyr/drivers/video/video_alif.h>
 #include <zephyr/drivers/video/isp-vsi.h>
@@ -348,6 +349,93 @@ int main(void)
 
 	LOG_INF("Capture started");
 
+#ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
+	/*
+	 * JPEG capture: CPI is configured for worst-case frame size.
+	 * Poll the buffer for JPEG EOI marker (0xFF 0xD9), then
+	 * stop the CPI via flush+stop. The JPEG compressed size is
+	 * determined by the EOI position.
+	 */
+	{
+		uint8_t *buf = buffers[0]->buffer;
+		int jpeg_size = -1;
+		int poll_count = 0;
+		const int max_polls = 500; /* 5 seconds max */
+
+		LOG_INF("Polling buffer for JPEG EOI marker...");
+
+		while (jpeg_size < 0 && poll_count < max_polls) {
+			k_msleep(10);
+			poll_count++;
+
+			/* Invalidate cache to see DMA-written data */
+			sys_cache_data_invd_range(buf, bsize);
+
+			/* Scan for SOI first to confirm JPEG data arrival */
+			if (poll_count % 50 == 0) {
+				LOG_INF("Poll %d: first bytes: %02x %02x %02x %02x",
+					poll_count, buf[0], buf[1], buf[2], buf[3]);
+			}
+
+			/* Scan for EOI marker (0xFF 0xD9) */
+			for (int j = 0; j < (int)bsize - 1; j++) {
+				if (buf[j] == 0xFF && buf[j + 1] == 0xD9) {
+					jpeg_size = j + 2;
+					break;
+				}
+			}
+		}
+
+		/* Stop CPI: flush cancel moves buffer to out-fifo, then stop */
+		LOG_INF("Stopping CPI capture...");
+		video_flush(video, VIDEO_EP_OUT, true);
+		video_stream_stop(video);
+
+		/* Scan for SOI marker anywhere in buffer */
+		int soi_offset = -1;
+
+		for (int j = 0; j < (int)bsize - 1; j++) {
+			if (buf[j] == 0xFF && buf[j + 1] == 0xD8) {
+				soi_offset = j;
+				break;
+			}
+		}
+		if (soi_offset >= 0) {
+			LOG_INF("SOI found at offset %d", soi_offset);
+		} else {
+			LOG_WRN("No SOI (0xFFD8) found anywhere in buffer");
+		}
+
+		/* Count 0xFF bytes in buffer */
+		int ff_count = 0;
+
+		for (int j = 0; j < (int)bsize; j++) {
+			if (buf[j] == 0xFF) {
+				ff_count++;
+			}
+		}
+		LOG_INF("0xFF byte count in buffer: %d / %d", ff_count, (int)bsize);
+
+		if (jpeg_size > 0) {
+			/* Round up to 8-byte alignment */
+			int aligned_size = (jpeg_size + 7) & ~7;
+
+			LOG_INF("JPEG EOI found at offset %d (aligned: %d)", jpeg_size,
+				aligned_size);
+			LOG_INF("JPEG SOI: %02x %02x, EOI: %02x %02x",
+				buf[0], buf[1], buf[jpeg_size - 2], buf[jpeg_size - 1]);
+			LOG_INF("Buffer dump: addr=0x%08x size=%d",
+				(uint32_t)buf, jpeg_size);
+		} else {
+			LOG_ERR("JPEG EOI not found after %d polls", poll_count);
+			LOG_INF("First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
+				"%02x %02x %02x %02x %02x %02x %02x %02x",
+				buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+				buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14],
+				buf[15]);
+		}
+	}
+#else
 	for (int i = 0; i < N_FRAMES; i++) {
 		ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
 		if (ret) {
@@ -357,21 +445,6 @@ int main(void)
 
 		LOG_INF("Got frame %u! size: %u; timestamp %u ms",
 		       frame++, vbuf->bytesused, vbuf->timestamp);
-
-#ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
-		/* For JPEG, verify SOI marker and log first bytes */
-		if (vbuf->bytesused >= 2) {
-			uint8_t *data = vbuf->buffer;
-
-			LOG_INF("JPEG header: %02x %02x %02x %02x %02x %02x",
-				data[0], data[1], data[2], data[3], data[4], data[5]);
-			if (data[0] == 0xFF && data[1] == 0xD8) {
-				LOG_INF("Valid JPEG SOI marker detected");
-			} else {
-				LOG_WRN("No JPEG SOI marker found!");
-			}
-		}
-#endif
 
 		if (last_timestamp == 0) {
 			LOG_INF("FPS: 0.0");
@@ -407,6 +480,7 @@ int main(void)
 		LOG_ERR("Unable to stop capture (interface). ret - %d", ret);
 		return -1;
 	}
+#endif
 
 	return 0;
 }
