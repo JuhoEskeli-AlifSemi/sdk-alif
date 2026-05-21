@@ -13,8 +13,9 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/video/video-interfaces.h>
 
-&ns {
-	status = "ok";
+ns: &ns {  
+	status = "okay";  
+	reg = < 0x20060000 DT_SIZE_K(512)>;  
 };
 
 /* USB */
