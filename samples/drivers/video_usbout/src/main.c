@@ -33,6 +33,11 @@
 LOG_MODULE_REGISTER(video_usbout, LOG_LEVEL_INF);
 
 #define N_VID_BUFF 1
+/* JPEG capture buffer size. Keep in sync with CONFIG_VIDEO_BUFFER_POOL_SZ_MAX
+ * in the board .conf file, which must be this value plus ~1 KB for k_heap
+ * block headers / alignment overhead.
+ */
+#define JPEG_CAPTURE_MAX_BYTES (420U * 1024U)
 
 #define ISP_ENABLED DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(isp))
 
@@ -85,8 +90,8 @@ static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 	case VIDEO_PIX_FMT_YVU420:
 		return (width * 3) >> 1;
 	case VIDEO_PIX_FMT_JPEG:
-		/* For JPEG, use full uncompressed size as max buffer */
-		return width * 2;
+		/* JPEG is compressed, pitch is not used to size the final frame buffer. */
+		return width;
 	case VIDEO_PIX_FMT_BGGR8:
 	case VIDEO_PIX_FMT_GBRG8:
 	case VIDEO_PIX_FMT_GRBG8:
@@ -187,8 +192,8 @@ int main(void)
 				fmt.width = 320;
 				fmt.height = 240;
 			} else if (IS_ENABLED(CONFIG_DT_HAS_OVTI_OV5640_ENABLED)) {
-				fmt.width = 160;
-				fmt.height = 120;
+				fmt.width = 2592;
+				fmt.height = 1944;
 			} else {
 				fmt.width = fcap->width_min;
 				fmt.height = fcap->height_min;
@@ -223,7 +228,15 @@ int main(void)
 	}
 #endif
 
-	bsize = fmt.pitch * fmt.height;
+	if (fmt.pixelformat == VIDEO_PIX_FMT_JPEG) {
+		/*
+		 * Bound JPEG capture buffer to avoid allocating an uncompressed-sized frame.
+		 * Tune this value if your quality settings produce larger compressed frames.
+		 */
+		bsize = MIN((size_t)JPEG_CAPTURE_MAX_BYTES, (size_t)fmt.width * fmt.height);
+	} else {
+		bsize = fmt.pitch * fmt.height;
+	}
 	LOG_INF("Format: %s %ux%u, pitch %u, buffer %u bytes",
 		fourcc_str(fmt.pixelformat, fcc),
 		fmt.width, fmt.height, fmt.pitch, bsize);

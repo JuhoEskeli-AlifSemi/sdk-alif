@@ -14,7 +14,7 @@
 #include <dt-bindings/video/video-interfaces.h>
 
 &ns {
-	status = "okay";
+	status = "ok";
 };
 
 /* USB */
@@ -28,7 +28,7 @@ zephyr_udc0: &usb {
 		compatible = "zephyr,ram-disk";
 		disk-name = "RAM";
 		sector-size = <512>;
-		sector-count = <192>;
+		sector-count = <600>;
 	};
 };
 
