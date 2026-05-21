@@ -277,18 +277,29 @@ int main(void)
 
 #ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
 	/*
-	 * JPEG capture: CPI is configured for worst-case frame size.
-	 * Poll the buffer for JPEG EOI marker (0xFF 0xD9), then
-	 * stop the CPI via flush+stop. The JPEG compressed size is
-	 * determined by the EOI position.
+	 * JPEG capture: CPI is configured for worst-case frame size and
+	 * the frame-complete interrupt is not reliable, so we poll the
+	 * DMA buffer for the JPEG EOI marker (0xFF 0xD9) and stop the
+	 * CPI as soon as it is found.
+	 *
+	 * To avoid false-matching an EOI inside an EXIF thumbnail, we
+	 * first wait for the SOI + SOS markers to appear, then scan only
+	 * the entropy-coded data that follows.  Within entropy data,
+	 * JPEG byte-stuffing encodes any literal 0xFF as 0xFF 0x00, so
+	 * 0xFF 0xD9 cannot be a false positive.
+	 *
+	 * The CPI hardware continues writing sensor padding after the
+	 * JPEG EOI until VSYNC, which is why the capture buffer must be
+	 * larger than the expected compressed size.
 	 */
 	{
 		uint8_t *buf = buffers[0]->buffer;
 		int jpeg_size = -1;
+		int scan_from = -1;  /* offset past SOS header, found once */
 		int poll_count = 0;
 		const int max_polls = 500; /* 5 seconds max */
 
-		LOG_INF("Polling buffer for JPEG EOI marker...");
+		LOG_INF("Polling buffer for JPEG data...");
 
 		while (jpeg_size < 0 && poll_count < max_polls) {
 			k_msleep(10);
@@ -302,8 +313,54 @@ int main(void)
 					poll_count, buf[0], buf[1], buf[2], buf[3]);
 			}
 
-			/* Scan for EOI marker (0xFF 0xD9) */
-			for (int j = 0; j < (int)bsize - 1; j++) {
+			/* Wait for SOI marker before attempting any parsing */
+			if (buf[0] != 0xFF || buf[1] != 0xD8) {
+				continue;
+			}
+
+			/*
+			 * Once SOI is present, locate SOS (0xFF 0xDA) to find
+			 * where entropy-coded data begins.  Only needs to
+			 * succeed once; subsequent polls reuse scan_from.
+			 */
+			if (scan_from < 0) {
+				int pos = 2;
+
+				while (pos < (int)bsize - 3) {
+					if (buf[pos] != 0xFF) {
+						break;
+					}
+					uint8_t marker = buf[pos + 1];
+
+					if (marker == 0xDA) {
+						uint16_t seg_len =
+							((uint16_t)buf[pos + 2] << 8)
+							| buf[pos + 3];
+						scan_from = pos + 2 + seg_len;
+						LOG_INF("SOS found, scanning for EOI from offset %d",
+							scan_from);
+						break;
+					}
+					/* Standalone markers (no length field) */
+					if (marker == 0x00 || marker == 0x01 ||
+					    (marker >= 0xD0 && marker <= 0xD9)) {
+						pos += 2;
+						continue;
+					}
+					/* Variable-length marker — skip */
+					uint16_t seg_len =
+						((uint16_t)buf[pos + 2] << 8)
+						| buf[pos + 3];
+					pos += 2 + seg_len;
+				}
+			}
+
+			if (scan_from < 0) {
+				continue; /* SOS not yet written by DMA */
+			}
+
+			/* Scan entropy data for EOI marker (0xFF 0xD9) */
+			for (int j = scan_from; j < (int)bsize - 1; j++) {
 				if (buf[j] == 0xFF && buf[j + 1] == 0xD9) {
 					jpeg_size = j + 2;
 					break;
@@ -311,19 +368,21 @@ int main(void)
 			}
 		}
 
-		/* Stop CPI: flush cancel moves buffer to out-fifo, then stop */
+		/* Stop CPI as soon as possible: flush+cancel then stop */
 		LOG_INF("Stopping CPI capture...");
 		video_flush(video, VIDEO_EP_OUT, true);
 		video_stream_stop(video);
 
 		if (jpeg_size > 0) {
-			LOG_INF("JPEG EOI found at offset %d", jpeg_size);
+			LOG_INF("JPEG EOI at offset %d (%d KB, %d polls)",
+				jpeg_size, jpeg_size / 1024, poll_count);
 			buffers[0]->bytesused = jpeg_size;
 			vbuf = buffers[0];
 		} else {
 			LOG_ERR("JPEG EOI not found after %d polls", poll_count);
-			LOG_INF("First 16 bytes: %02x %02x %02x %02x %02x %02x %02x %02x "
-				"%02x %02x %02x %02x %02x %02x %02x %02x",
+			LOG_INF("First 16 bytes: %02x %02x %02x %02x %02x %02x "
+				"%02x %02x %02x %02x %02x %02x %02x %02x "
+				"%02x %02x",
 				buf[0], buf[1], buf[2], buf[3],
 				buf[4], buf[5], buf[6], buf[7],
 				buf[8], buf[9], buf[10], buf[11],
