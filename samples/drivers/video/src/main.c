@@ -327,7 +327,7 @@ int main(void)
 			buffers[i]->bytesused,
 			fmt.width, fmt.height);
 
-		memset(buffers[i]->buffer, 0, sizeof(char) * bsize);
+		//memset(buffers[i]->buffer, 0, sizeof(char) * bsize);
 		video_enqueue(video, VIDEO_EP_OUT, buffers[i]);
 
 		LOG_INF("capture buffer[%d]: dump binary memory "
@@ -342,7 +342,7 @@ int main(void)
 	 * then mt9m114 camera sensor is not setup properly and images its
 	 * sending out are not clear.
 	 */
-	k_msleep(7000);
+	//k_msleep(7000);
 
 #if CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
 	/* Video test SNAPSHOT capture. */

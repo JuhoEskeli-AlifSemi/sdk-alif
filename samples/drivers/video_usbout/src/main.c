@@ -255,7 +255,7 @@ int main(void)
 			LOG_ERR("Unable to alloc video buffer");
 			return -1;
 		}
-		memset(buffers[i]->buffer, 0, bsize);
+		//memset(buffers[i]->buffer, 0, bsize);
 		video_enqueue(video, VIDEO_EP_OUT, buffers[i]);
 	}
 
@@ -263,7 +263,7 @@ int main(void)
 	 * Delay needed for some sensors (e.g. mt9m114) to stabilize
 	 * after configuration.
 	 */
-	k_msleep(7000);
+	//k_msleep(7000);
 
 #ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
 	uint32_t num_frames = 1;
