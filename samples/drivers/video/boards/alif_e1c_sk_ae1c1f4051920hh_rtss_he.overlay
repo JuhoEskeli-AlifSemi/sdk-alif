@@ -27,6 +27,9 @@
 
 &i2c1 {
 	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+	hcnt-offset = <10>;
+	lcnt-offset = <10>;
 
 	ov5640: ov5640@3c{
 		compatible = "ovti,ov5640";
