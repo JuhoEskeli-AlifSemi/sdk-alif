@@ -8,14 +8,14 @@
  *
  */
 
-#include <dt-bindings/pinctrl/balletto-pinctrl.h>
+#include <dt-bindings/pinctrl/ensemble-e1c-pinctrl.h>
 #include <dt-bindings/i2c/i2c.h>
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/video/video-interfaces.h>
 
-ns: &ns {  
-	status = "okay";  
-	reg = < 0x200A0000 DT_SIZE_K(512)>;  
+ns: &ns {
+	status = "okay";
+	reg = < 0x200A0000 DT_SIZE_K(512)>;
 };
 
 /* USB */
@@ -33,8 +33,28 @@ zephyr_udc0: &usb {
 	};
 };
 
+/*
+ * Override gpio1 pinctrl to exclude P1_0 (JTAG_TMS), P1_1 (JTAG_TDI) and
+ * P1_2 (JTAG_TDO) which are connected to the JTAG debug connector on the
+ * E1C SK board. The default pinctrl_gpio1 covers the full port and would
+ * remux those pads to GPIO, breaking the debug interface.
+ */
+&pinctrl {
+	pinctrl_gpio1_video: pinctrl_gpio1_video {
+		group0 {
+			pinmux = <PIN_P1_3__GPIO>,
+				 <PIN_P1_4__GPIO>,
+				 <PIN_P1_5__GPIO>,
+				 <PIN_P1_6__GPIO>,
+				 <PIN_P1_7__GPIO>;
+			read-enable = <0x1>;
+		};
+	};
+};
+
 /* Camera */
 &gpio1 {
+	pinctrl-0 = <&pinctrl_gpio1_video>;
 	status = "okay";
 };
 
