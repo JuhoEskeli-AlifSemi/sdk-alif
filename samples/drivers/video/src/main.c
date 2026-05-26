@@ -545,7 +545,8 @@ static int app_set_parameters(void)
 	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);
 
 #if (DT_NODE_HAS_STATUS(DT_NODELABEL(lpcam), okay))
-
+	//This works as well (capture in 250ms), but would need changes to ACG as the picture is very dark
+	//sys_write32(0x060001, M55HE_CFG_HE_CAMERA_PIXCLK);
 	sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
 
 #if CONFIG_DT_HAS_OVTI_OV5640_ENABLED
