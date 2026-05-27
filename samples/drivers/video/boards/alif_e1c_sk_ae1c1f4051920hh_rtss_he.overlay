@@ -84,13 +84,35 @@
 
 /*
  * Capture trigger button on LPGPIO 0 (P15_0). Reuses the simple_pm
- * "wakeup_pins" / "lpgpio-wakeup-pin" pattern so the same node can later
- * drive the PM wakeup path without overlay churn.
+ * "wakeup_pins" / "lpgpio-wakeup-pin" pattern so the same node also drives
+ * the PM wakeup path.
  */
 / {
 	wakeup_pins: wakeup_pins {
 		compatible = "lpgpio-wakeup-pin";
 		lpgpios = <&lpgpio 0 GPIO_ACTIVE_LOW>;
+	};
+};
+
+/*
+ * PM bits: RTC as Cortex-M idle timer, S2RAM as the chosen low-power state.
+ * The video sample does not arm the RTC for timed wakeups — it serves only
+ * as the idle-time reference for the LPM systick hooks.
+ */
+&rtc0 {
+	prescaler = <1>;
+	status = "okay";
+};
+
+&stop_s2ram {
+	min-residency-us = <4000>;
+	exit-latency-us = <3000>;
+	status = "okay";
+};
+
+/ {
+	chosen {
+		zephyr,cortex-m-idle-timer = &rtc0;
 	};
 };
 
