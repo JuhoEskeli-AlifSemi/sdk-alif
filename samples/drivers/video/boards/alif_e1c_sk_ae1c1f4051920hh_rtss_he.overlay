@@ -13,6 +13,31 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/video/video-interfaces.h>
 
+/*
+ * Latency probe: P0_3 driven high at boot, low when capture starts,
+ * high again when a frame has been dequeued.  Used for oscilloscope
+ * measurements of camera acquisition latency.
+ */
+/ {
+	zephyr,user {
+		latency-gpios = <&gpio0 3 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&pinctrl {
+	pinctrl_gpio0_latency: pinctrl_gpio0_latency {
+		group0 {
+			pinmux = <PIN_P0_3__GPIO>;
+			read-enable = <0x1>;
+		};
+	};
+};
+
+&gpio0 {
+	pinctrl-0 = <&pinctrl_gpio0_latency>;
+	status = "okay";
+};
+
 &ns {
 	status = "okay";
 };

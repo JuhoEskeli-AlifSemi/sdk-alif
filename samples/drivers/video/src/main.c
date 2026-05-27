@@ -22,6 +22,44 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 
+/*
+ * Latency probe GPIO (P0_3 on e1c SK).
+ * Defined via the "zephyr,user" node in the board overlay.
+ * Compile-time guard keeps other board builds unaffected.
+ *
+ * Three scope events on P0_3:
+ *   1. Rising edge  — very early boot  (SYS_INIT PRE_KERNEL_1, called from
+ *                      app_set_parameters before main() runs)
+ *   2. Falling edge — capture started  (just before video_stream_start)
+ *   3. Rising edge  — frame received   (video_dequeue returned)
+ *
+ * No LOG calls inside latency_probe_init — logging is not yet available at
+ * the PRE_KERNEL_1 init level.
+ */
+#if DT_NODE_HAS_PROP(DT_PATH(zephyr_user), latency_gpios)
+#define HAS_LATENCY_PROBE 1
+static const struct gpio_dt_spec latency_pin =
+	GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), latency_gpios);
+static inline void latency_probe_init(void)
+{
+	/*
+	 * Drive HIGH: rising edge = boot reference on the scope.
+	 * Called from app_set_parameters() at SYS_INIT PRE_KERNEL_1,
+	 * priority 46 — well before main() is entered.
+	 * Pin stays HIGH until the first latency_probe_set(0) call
+	 * (capture start), giving a clear idle baseline on the scope.
+	 */
+	gpio_pin_configure_dt(&latency_pin, GPIO_OUTPUT_ACTIVE);
+}
+static inline void latency_probe_set(int val)
+{
+	gpio_pin_set_dt(&latency_pin, val);
+}
+#else
+static inline void latency_probe_init(void) {}
+static inline void latency_probe_set(int val) { ARG_UNUSED(val); }
+#endif /* HAS_LATENCY_PROBE */
+
 #ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
 #define N_FRAMES		1
 #else
@@ -354,8 +392,10 @@ int main(void)
 #endif
 
 	/* Start video capture */
+	latency_probe_set(0); /* LOW: capture in progress */
 	ret = video_stream_start(video);
 	if (ret) {
+		latency_probe_set(1); /* restore HIGH on error */
 		LOG_ERR("Unable to start capture (interface). ret - %d", ret);
 		return -1;
 	}
@@ -375,6 +415,7 @@ int main(void)
 	 * cannot appear as a false positive within compressed data.
 	 */
 	ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
+	latency_probe_set(1); /* HIGH: frame received */
 	if (ret) {
 		LOG_ERR("Unable to dequeue video buf: %d", ret);
 		return -1;
@@ -454,12 +495,14 @@ int main(void)
 
 	video_flush(video, VIDEO_EP_OUT, false);
 	ret = video_stream_stop(video);
+	latency_probe_set(0); /* LOW: capture sequence done */
 	if (ret) {
 		LOG_ERR("Unable to stop capture: %d", ret);
 	}
 #else
 	for (int i = 0; i < N_FRAMES; i++) {
 		ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
+		latency_probe_set(1); /* HIGH: frame received */
 		if (ret) {
 			LOG_ERR("Unable to dequeue video buf");
 			return -1;
@@ -484,8 +527,10 @@ int main(void)
 				return -1;
 			}
 
+			latency_probe_set(0); /* LOW: starting next capture */
 			ret = video_stream_start(video);
 			if (ret && ret != -EBUSY) {
+				latency_probe_set(1); /* restore HIGH on error */
 				LOG_ERR("Unable to restart capture (interface). ret - %d",
 						ret);
 				return -1;
@@ -498,6 +543,7 @@ int main(void)
 
 	LOG_INF("Calling video stream stop.");
 	ret = video_stream_stop(video);
+	latency_probe_set(0); /* LOW: capture sequence done */
 	if (ret) {
 		LOG_ERR("Unable to stop capture (interface). ret - %d", ret);
 		return -1;
@@ -511,6 +557,13 @@ static int app_set_parameters(void)
 {
 	run_profile_t runp = { 0 };
 	int ret;
+
+	/*
+	 * Latency probe event 1: boot reference.
+	 * Pin goes HIGH here at PRE_KERNEL_1 — the earliest rising edge the
+	 * scope will see, well before main() is entered.
+	 */
+	latency_probe_init();
 
 #if (DT_NODE_HAS_STATUS(DT_NODELABEL(camera_select), okay))
 	const struct gpio_dt_spec sel =
