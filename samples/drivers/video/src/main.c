@@ -60,6 +60,80 @@ static inline void latency_probe_init(void) {}
 static inline void latency_probe_set(int val) { ARG_UNUSED(val); }
 #endif /* HAS_LATENCY_PROBE */
 
+/*
+ * Capture trigger button.
+ *
+ * Reuses the simple_pm "wakeup_pins" / "lpgpio-wakeup-pin" DT pattern so
+ * the same pin can later double as the PM wakeup source. Index 0 in the
+ * lpgpios list is the button (LPGPIO 0 on e1c SK).
+ */
+#if DT_NODE_EXISTS(DT_NODELABEL(wakeup_pins))
+#define HAS_CAPTURE_BUTTON 1
+static const struct gpio_dt_spec capture_button =
+	GPIO_DT_SPEC_GET_BY_IDX(DT_NODELABEL(wakeup_pins), lpgpios, 0);
+
+static K_SEM_DEFINE(button_wait_sem, 0, 1);
+static struct gpio_callback button_cb_data;
+
+static void button_callback(const struct device *dev, struct gpio_callback *cb,
+			    uint32_t pins)
+{
+	ARG_UNUSED(dev);
+	ARG_UNUSED(cb);
+	ARG_UNUSED(pins);
+
+	if (!k_sem_count_get(&button_wait_sem)) {
+		k_sem_give(&button_wait_sem);
+	}
+}
+
+static int configure_capture_button(void)
+{
+	int ret;
+
+	if (!gpio_is_ready_dt(&capture_button)) {
+		LOG_ERR("Capture button GPIO not ready");
+		return -ENODEV;
+	}
+
+	ret = gpio_pin_configure_dt(&capture_button,
+				    GPIO_INPUT | capture_button.dt_flags);
+	if (ret) {
+		LOG_ERR("Failed to configure capture button: %d", ret);
+		return ret;
+	}
+
+	ret = gpio_pin_interrupt_configure_dt(&capture_button,
+					      GPIO_INT_EDGE_FALLING);
+	if (ret) {
+		LOG_ERR("Failed to configure capture button interrupt: %d", ret);
+		return ret;
+	}
+
+	gpio_init_callback(&button_cb_data, button_callback,
+			   BIT(capture_button.pin));
+	ret = gpio_add_callback(capture_button.port, &button_cb_data);
+	if (ret) {
+		LOG_ERR("Failed to add capture button callback: %d", ret);
+		return ret;
+	}
+
+	LOG_INF("Capture button configured (LPGPIO%d)", capture_button.pin);
+	return 0;
+}
+
+static void wait_for_capture_button(void)
+{
+	LOG_INF("Press the button to capture another picture...");
+	k_sem_reset(&button_wait_sem);
+	k_sem_take(&button_wait_sem, K_FOREVER);
+	LOG_INF("Button pressed, starting next capture");
+}
+#else
+static inline int configure_capture_button(void) { return 0; }
+static inline void wait_for_capture_button(void) {}
+#endif /* DT_NODE_EXISTS(DT_NODELABEL(wakeup_pins)) */
+
 #ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
 #define N_FRAMES		1
 #else
@@ -350,7 +424,7 @@ int main(void)
 		}
 #endif /* CONFIG_VIDEO_ALIF_CAM_EXTENDED */
 
-	/* Alloc video buffers and enqueue for capture */
+	/* Alloc video buffers (enqueue happens per capture iteration below) */
 	for (i = 0; i < ARRAY_SIZE(buffers); i++) {
 		buffers[i] = video_buffer_alloc(bsize, K_NO_WAIT);
 		if (buffers[i] == NULL) {
@@ -364,9 +438,6 @@ int main(void)
 			bsize,
 			buffers[i]->bytesused,
 			fmt.width, fmt.height);
-
-		//memset(buffers[i]->buffer, 0, sizeof(char) * bsize);
-		video_enqueue(video, VIDEO_EP_OUT, buffers[i]);
 
 		LOG_INF("capture buffer[%d]: dump binary memory "
 			"\"/home/$USER/capture_%d.bin\" 0x%08x 0x%08x -r\n",
@@ -382,13 +453,45 @@ int main(void)
 	 */
 	//k_msleep(7000);
 
-#if CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
-	/* Video test SNAPSHOT capture. */
-	num_frames = N_FRAMES;
-	ret = video_set_ctrl(video, VIDEO_CID_SNAPSHOT_CAPTURE, &num_frames);
+	ret = configure_capture_button();
 	if (ret) {
-		LOG_INF("Snapshot mode not-supported by CMOS sensor.");
+		return ret;
 	}
+
+	/*
+	 * Capture loop: take a picture on each iteration. After the first
+	 * capture, wait for a button press before capturing again. Without a
+	 * configured capture button the loop falls through to a single
+	 * capture (original sample behavior).
+	 */
+	bool first_capture = true;
+
+	while (1) {
+		if (!first_capture) {
+			wait_for_capture_button();
+		}
+		first_capture = false;
+
+		/* Reset per-capture frame stats. */
+		frame = 0;
+		last_timestamp = 0;
+
+		/* Enqueue all buffers for this capture round. */
+		for (i = 0; i < ARRAY_SIZE(buffers); i++) {
+			ret = video_enqueue(video, VIDEO_EP_OUT, buffers[i]);
+			if (ret) {
+				LOG_ERR("Unable to enqueue buf %d: %d", i, ret);
+				return -1;
+			}
+		}
+
+#if CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
+		/* Video test SNAPSHOT capture. */
+		num_frames = N_FRAMES;
+		ret = video_set_ctrl(video, VIDEO_CID_SNAPSHOT_CAPTURE, &num_frames);
+		if (ret) {
+			LOG_INF("Snapshot mode not-supported by CMOS sensor.");
+		}
 #endif
 
 	/* Start video capture */
@@ -549,6 +652,12 @@ int main(void)
 		return -1;
 	}
 #endif
+
+#ifndef HAS_CAPTURE_BUTTON
+		/* No button wired up: keep original single-capture behavior. */
+		break;
+#endif
+	} /* while (1) */
 
 	return 0;
 }
