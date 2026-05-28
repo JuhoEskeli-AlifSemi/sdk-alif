@@ -499,7 +499,8 @@ static int app_set_parameters(void)
 	latency_probe_init();
 
 	runp.power_domains  = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
-	runp.dcdc_voltage   = 825;
+	//runp.dcdc_voltage   = 825;
+	runp.dcdc_voltage   = 775;
 	runp.dcdc_mode      = DCDC_MODE_PWM;
 	runp.aon_clk_src    = CLK_SRC_LFXO;
 	runp.run_clk_src    = CLK_SRC_PLL;

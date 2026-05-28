@@ -33,6 +33,12 @@
 	};
 };
 
+&pinctrl_uart2 {
+	group0 {
+		driver-state-control = <1>; /* pull-up: initialize RX active-high */
+	};
+};
+
 &gpio0 {
 	pinctrl-0 = <&pinctrl_gpio0_latency>;
 	status = "okay";
