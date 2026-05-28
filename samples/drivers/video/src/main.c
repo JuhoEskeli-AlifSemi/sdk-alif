@@ -491,12 +491,7 @@ static int app_set_parameters(void)
 	run_profile_t runp = { 0 };
 	int ret;
 
-	/*
-	 * Latency probe event 1: boot reference. Pin goes HIGH here at
-	 * PRE_KERNEL_1 — the earliest rising edge the scope will see, well
-	 * before main() is entered.
-	 */
-	latency_probe_init();
+	
 
 	runp.power_domains  = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
 	//runp.dcdc_voltage   = 825;
@@ -530,6 +525,13 @@ static int app_set_parameters(void)
 		GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enbuf_gpios);
 
 	gpio_pin_configure_dt(&cam_enbuf, GPIO_OUTPUT_ACTIVE);
+
+	/*
+	 * Latency probe event 1: boot reference. Pin goes HIGH here at
+	 * PRE_KERNEL_1 — the earliest rising edge the scope will see, well
+	 * before main() is entered.
+	 */
+	latency_probe_init();
 
 	return 0;
 }
