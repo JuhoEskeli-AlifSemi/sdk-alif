@@ -8,6 +8,7 @@
 #include <zephyr/init.h>
 
 #include <zephyr/drivers/video.h>
+#include <zephyr/drivers/video/ov5640-video-controls.h>
 #include <soc_common.h>
 #include <se_service.h>
 #include <zephyr/drivers/gpio.h>
@@ -270,6 +271,33 @@ int main(void)
 		return -1;
 	}
 	LOG_INF("- Device name: %s", video->name);
+
+	{
+		uint8_t chip_rev = 0;
+		int rev_ret = video_get_ctrl(video, VIDEO_OV5640_CID_CHIP_REVISION,
+					     &chip_rev);
+
+		if (rev_ret) {
+			LOG_WRN("Unable to read OV5640 chip revision: %d", rev_ret);
+		} else {
+			const char *proc;
+
+			switch (chip_rev >> 4) {
+			case 0xA:
+				proc = "FSI";
+				break;
+			case 0xB:
+				proc = "BSI";
+				break;
+			default:
+				proc = "unknown";
+				break;
+			}
+			LOG_INF("- OV5640 reg 0x302A = 0x%02x "
+				"(process %s, revision %u)",
+				chip_rev, proc, chip_rev & 0x0F);
+		}
+	}
 
 	if (video_get_caps(video, VIDEO_EP_OUT, &caps)) {
 		LOG_ERR("Unable to retrieve video capabilities");
