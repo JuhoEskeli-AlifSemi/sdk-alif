@@ -112,6 +112,40 @@ static void wait_for_capture_button(void)
 }
 
 /*
+ * OV5640 hardware standby.
+ *
+ * video_stream_stop already issues SCCB software standby (writes
+ * SYS_CTRL0=SW_PWDN), which suspends internal circuitry but leaves the
+ * sensor's internal clock running. Driving PWDN high enters hardware
+ * standby: the internal clock is halted, counters reset, and all register
+ * content is preserved — no re-init required on exit.
+ *
+ * PWDN is owned by the OV5640 driver (`powerdown_gpios` in its DT node);
+ * the driver configures it as output and releases it (low) during init.
+ * After init we just flip the level from the application.
+ *
+ * Note: in MIPI mode the datasheet requires writing 0x300E[4:3]=2'b11
+ * before raising PWDN. This sample's overlay uses the DVP/parallel path
+ * (bus-type = VIDEO_BUS_TYPE_PARALLEL), so that step is omitted.
+ */
+static const struct gpio_dt_spec cam_pwdn =
+	GPIO_DT_SPEC_GET(DT_NODELABEL(ov5640), powerdown_gpios);
+
+static void camera_enter_hw_standby(void)
+{
+	gpio_pin_set_dt(&cam_pwdn, 1);
+}
+
+static void camera_exit_hw_standby(void)
+{
+	gpio_pin_set_dt(&cam_pwdn, 0);
+	/* Mirrors the cold-init guard in the OV5640 driver (k_sleep(1 ms)
+	 * after PWDN release) so SCCB writes from the next stream_start
+	 * see a settled sensor. */
+	k_msleep(1);
+}
+
+/*
  * Power management: STOP-mode SUSPEND_TO_RAM with LPGPIO wakeup.
  *
  * Pattern adapted from alif/samples/simple_pm — the sleep window is the
