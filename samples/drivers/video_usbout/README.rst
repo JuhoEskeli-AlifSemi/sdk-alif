@@ -1,57 +1,78 @@
 .. Copyright (C) 2026 Alif Semiconductor
    SPDX-License-Identifier: Apache-2.0
 
+.. _video-usbout-sample:
+
 Video USB Out Sample
 ####################
 
 Overview
 ********
 
-This sample captures a frame from the camera sensor and exposes it as a file
-on a USB mass storage device. When connected to a host PC via USB, the
-captured image appears as a file (``cap_0.bin``) on a removable drive,
-eliminating the need to use a debugger to dump memory.
+This sample captures a single JPEG snapshot from an **OV5640** parallel
+camera on the Alif **E1C SK** board and exposes it as a file on a USB
+mass storage device. When the board is connected to a host PC the
+captured image appears as ``capture.jpg`` on a removable drive, with no
+debugger needed to read the frame.
 
-The sample:
+The flow is:
 
-1. Initializes the camera and captures a single frame
-2. Mounts a FAT filesystem on a RAM disk
-3. Writes the captured frame data to ``cap_0.bin``
-4. Enables USB mass storage so the host can read the file
+1. The camera pipeline is initialized and a FAT filesystem is mounted
+   on a RAM disk.
+2. One frame is captured and written to ``/RAM:/capture.jpg``.
+3. USB MSC is enabled and the host sees the removable drive containing
+   the JPEG.
+
+Pipeline behaviour:
+
+* The OV5640 delivers JPEG-compressed frames over the parallel CPI bus
+  to the LPCAM controller, which writes the frame straight into M55
+  memory.
+* The CPI driver stops capture on the second VSYNC; the sample then
+  scans the buffer for the JPEG ``EOI`` marker (skipping any EXIF
+  thumbnail) to determine the actual compressed size before writing
+  the file.
 
 Requirements
 ************
 
-* A board with camera and USB support (e.g., Alif E1C SK/DK)
-* A camera sensor connected to the board
+* Alif E1C SK board with a populated OV5640 module.
+* USB cable from the board to a host PC.
+
+Supported Target
+****************
+
+* ``alif_e1c_sk/ae1c1f4051920hh/rtss_he``
+
+This sample is intentionally not portable to other Alif boards or sensors —
+the run profile, pinctrl, ``cam_enbuf`` GPIO and JPEG snapshot path are
+all OV5640 + E1C SK specific.
 
 Building and Running
 ********************
 
 .. code-block:: console
 
-   west build -b alif_e1c_sk/ae1c1f4051920hh/rtss_he \
-       alif/samples/drivers/video_usbout \
-       -- -DDTC_OVERLAY_FILE=boards/alif_e1c_sk_ae1c1f4051920hh_rtss_he.overlay
+   west build -b alif_e1c_sk/ae1c1f4051920hh/rtss_he alif/samples/drivers/video_usbout
+   west flash
 
 After flashing, connect the USB cable to the host PC. A removable drive
-will appear containing the captured image file.
+appears containing ``capture.jpg``. To take a new picture, reset the
+board.
 
-The raw image data can be viewed using tools like ``ffplay`` or converted
-using ``ffmpeg``:
+Sample Output
+*************
 
 .. code-block:: console
 
-   # For RGB565 160x120 (OV5640):
-   ffplay -f rawvideo -pixel_format rgb565le -video_size 160x120 cap_0.bin
-
-   # For Bayer BGGR8 320x240 (HM0360):
-   ffplay -f rawvideo -pixel_format bayer_bggr8 -video_size 320x240 cap_0.bin
-
-RAM Disk Sizing
-***************
-
-The RAM disk is configured in the board overlay with ``sector-count``.
-The default of 2048 sectors (1 MB) accommodates most image sizes. Adjust
-this if your captured image is larger (e.g., higher resolution or deeper
-pixel format).
+  *** Booting Zephyr OS build ... ***
+  [00:00:00.074,000] <inf> video_usbout: - Device name: lpcam@43003000
+  [00:00:00.074,000] <inf> video_usbout: - OV5640 reg 0x302A = 0xb0 (process BSI, revision 0)
+  [00:00:00.074,000] <inf> video_usbout: - format: JPEG 2592x1944
+  [00:00:00.074,000] <inf> video_usbout: - capture buffer: 430080 bytes at 0x200a1e38
+  [00:00:00.078,000] <inf> video_usbout: FAT filesystem mounted on /RAM:
+  [00:00:00.189,000] <inf> video_usbout: Capture started
+  [00:00:00.346,000] <inf> video_usbout: Frame captured, scanning for JPEG EOI...
+  [00:00:00.356,000] <inf> video_usbout: JPEG EOI at offset 158022 (154 KB), timestamp 346 ms
+  [00:00:00.382,000] <inf> video_usbout: Wrote 158022 bytes to /RAM:/capture.jpg
+  [00:00:00.382,000] <inf> video_usbout: USB mass storage enabled — /RAM:/capture.jpg available on host.

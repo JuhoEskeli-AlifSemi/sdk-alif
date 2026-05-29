@@ -2,11 +2,11 @@
  * Copyright (C) 2026 Alif Semiconductor.
  * SPDX-License-Identifier: Apache-2.0
  *
- * Video capture to USB mass storage sample.
+ * OV5640 JPEG capture exposed as a file on USB mass storage.
  *
- * Captures a frame from the camera and writes it to a FAT filesystem
- * on a RAM disk exposed as USB mass storage. The host PC can then
- * read the captured image file directly without needing a debugger.
+ * On boot the camera pipeline is initialized, one snapshot is captured,
+ * written to a FAT filesystem on a RAM disk and exposed over USB MSC so
+ * the host PC sees it as a removable drive containing capture.jpg.
  */
 
 #include <sample_usbd.h>
@@ -14,8 +14,8 @@
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
 #include <zephyr/drivers/video.h>
+#include <zephyr/drivers/video/ov5640-video-controls.h>
 #include <zephyr/drivers/gpio.h>
-#include <zephyr/cache.h>
 #include <zephyr/usb/usbd.h>
 #include <zephyr/usb/class/usbd_msc.h>
 #include <zephyr/fs/fs.h>
@@ -23,37 +23,18 @@
 #include <soc_common.h>
 #include <se_service.h>
 
-#include <zephyr/drivers/video/video_alif.h>
-
-#ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
-#include <zephyr/drivers/video/hm0360-video-controls.h>
-#endif
-
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(video_usbout, LOG_LEVEL_INF);
 
-#define N_VID_BUFF 1
-/* JPEG capture buffer size. Keep in sync with CONFIG_VIDEO_BUFFER_POOL_SZ_MAX
- * in the board .conf file, which must be this value plus ~1 KB for k_heap
- * block headers / alignment overhead.
+/*
+ * JPEG capture buffer size. Keep in sync with CONFIG_VIDEO_BUFFER_POOL_SZ_MAX
+ * in the board .conf — that value must be this plus ~1 KB for k_heap block
+ * headers / alignment overhead.
  */
 #define JPEG_CAPTURE_MAX_BYTES (420U * 1024U)
 
-#define ISP_ENABLED DT_NODE_HAS_STATUS_OKAY(DT_NODELABEL(isp))
+#define CAPTURE_FILE_PATH "/RAM:/capture.jpg"
 
-#ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
-#define PIPELINE_FORMAT	VIDEO_PIX_FMT_BGGR8
-#elif CONFIG_DT_HAS_OVTI_OV5640_ENABLED
-#define PIPELINE_FORMAT	VIDEO_PIX_FMT_JPEG
-#else
-#define PIPELINE_FORMAT	VIDEO_PIX_FMT_Y10P
-#endif
-
-#if ISP_ENABLED
-#define OUTPUT_FORMAT VIDEO_PIX_FMT_RGB888_PLANAR_PRIVATE
-#endif
-
-/* Define USB MSC LUN for the RAM disk */
 USBD_DEFINE_MSC_LUN(ram, "RAM", "Alif", "VideoCapture", "0.01");
 
 static FATFS fat_fs;
@@ -63,75 +44,123 @@ static struct fs_mount_t fs_mnt = {
 	.mnt_point = "/RAM:",
 };
 
-static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
+/*
+ * Scan a captured buffer for the JPEG EOI marker and report the compressed
+ * size. Parses past the SOS (Start of Scan) marker first so an EOI inside
+ * an EXIF thumbnail is not mistakenly reported. JPEG byte-stuffing
+ * guarantees 0xFF 0xD9 cannot appear as a false positive within the
+ * entropy-coded data.
+ */
+static int find_jpeg_size(const uint8_t *bytes, size_t bsize)
 {
-	switch (fourcc) {
-	case VIDEO_PIX_FMT_RGB888_PLANAR_PRIVATE:
-	case VIDEO_PIX_FMT_NV24:
-	case VIDEO_PIX_FMT_NV42:
-		return width * 3;
-	case VIDEO_PIX_FMT_RGB565:
-	case VIDEO_PIX_FMT_Y10P:
-	case VIDEO_PIX_FMT_BGGR10:
-	case VIDEO_PIX_FMT_GBRG10:
-	case VIDEO_PIX_FMT_GRBG10:
-	case VIDEO_PIX_FMT_RGGB10:
-	case VIDEO_PIX_FMT_YUYV:
-	case VIDEO_PIX_FMT_YVYU:
-	case VIDEO_PIX_FMT_VYUY:
-	case VIDEO_PIX_FMT_UYVY:
-	case VIDEO_PIX_FMT_NV16:
-	case VIDEO_PIX_FMT_NV61:
-	case VIDEO_PIX_FMT_YUV422P:
-		return width << 1;
-	case VIDEO_PIX_FMT_NV12:
-	case VIDEO_PIX_FMT_NV21:
-	case VIDEO_PIX_FMT_YUV420:
-	case VIDEO_PIX_FMT_YVU420:
-		return (width * 3) >> 1;
-	case VIDEO_PIX_FMT_JPEG:
-		/* JPEG is compressed, pitch is not used to size the final frame buffer. */
-		return width;
-	case VIDEO_PIX_FMT_BGGR8:
-	case VIDEO_PIX_FMT_GBRG8:
-	case VIDEO_PIX_FMT_GRBG8:
-	case VIDEO_PIX_FMT_RGGB8:
-	case VIDEO_PIX_FMT_GREY:
-	default:
-		return width;
+	int scan_from = 2;
+	int pos = 2;
+
+	if (bytes[0] != 0xFF || bytes[1] != 0xD8) {
+		LOG_ERR("No JPEG SOI marker (got %02x %02x)",
+			bytes[0], bytes[1]);
+		return -EIO;
 	}
+
+	while (pos < (int)bsize - 3) {
+		if (bytes[pos] != 0xFF) {
+			break;
+		}
+		uint8_t marker = bytes[pos + 1];
+
+		if (marker == 0xDA) {
+			uint16_t seg_len =
+				((uint16_t)bytes[pos + 2] << 8) |
+				bytes[pos + 3];
+			scan_from = pos + 2 + seg_len;
+			break;
+		}
+		if (marker == 0x00 || marker == 0x01 ||
+		    (marker >= 0xD0 && marker <= 0xD9)) {
+			pos += 2;
+			continue;
+		}
+		uint16_t seg_len =
+			((uint16_t)bytes[pos + 2] << 8) | bytes[pos + 3];
+		pos += 2 + seg_len;
+	}
+
+	for (int j = scan_from; j < (int)bsize - 1; j++) {
+		if (bytes[j] == 0xFF && bytes[j + 1] == 0xD9) {
+			return j + 2;
+		}
+	}
+
+	LOG_ERR("JPEG EOI not found in %zu byte buffer", bsize);
+	return -EIO;
 }
 
-static const char *fourcc_str(uint32_t fourcc, char buf[5])
+static int capture_one_jpeg(const struct device *video,
+			    struct video_buffer *buf, size_t bsize)
 {
-	buf[0] = (char)(fourcc);
-	buf[1] = (char)(fourcc >> 8);
-	buf[2] = (char)(fourcc >> 16);
-	buf[3] = (char)(fourcc >> 24);
-	buf[4] = '\0';
-	return buf;
+	struct video_buffer *vbuf;
+	int jpeg_size;
+	int ret;
+
+	ret = video_enqueue(video, VIDEO_EP_OUT, buf);
+	if (ret) {
+		LOG_ERR("Unable to enqueue buf: %d", ret);
+		return ret;
+	}
+
+	ret = video_stream_start(video);
+	if (ret) {
+		LOG_ERR("Unable to start capture: %d", ret);
+		return ret;
+	}
+	LOG_INF("Capture started");
+
+	/*
+	 * The CPI driver stops capture on the 2nd VSYNC (end-of-frame) and
+	 * moves the buffer to fifo_out. Block on video_dequeue until that
+	 * happens, then scan the buffer for the JPEG EOI marker.
+	 */
+	ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
+	if (ret) {
+		LOG_ERR("Unable to dequeue video buf: %d", ret);
+		return ret;
+	}
+	LOG_INF("Frame captured, scanning for JPEG EOI...");
+
+	jpeg_size = find_jpeg_size(vbuf->buffer, bsize);
+	if (jpeg_size < 0) {
+		return jpeg_size;
+	}
+
+	vbuf->bytesused = jpeg_size;
+	LOG_INF("JPEG EOI at offset %d (%d KB), timestamp %u ms",
+		jpeg_size, jpeg_size / 1024, vbuf->timestamp);
+
+	video_flush(video, VIDEO_EP_OUT, false);
+	ret = video_stream_stop(video);
+	if (ret) {
+		LOG_ERR("Unable to stop capture: %d", ret);
+	}
+	return 0;
 }
 
-static int write_capture_to_file(struct video_buffer *vbuf, int index,
-				 const char *ext)
+static int write_capture_to_file(const struct video_buffer *vbuf)
 {
 	struct fs_file_t file;
-	char path[32];
 	ssize_t written;
 	int ret;
 
-	snprintf(path, sizeof(path), "/RAM:/cap_%d.%s", index, ext);
-
 	fs_file_t_init(&file);
-	ret = fs_open(&file, path, FS_O_CREATE | FS_O_WRITE);
+	ret = fs_open(&file, CAPTURE_FILE_PATH, FS_O_CREATE | FS_O_WRITE);
 	if (ret) {
-		LOG_ERR("Failed to open %s: %d", path, ret);
+		LOG_ERR("Failed to open %s: %d", CAPTURE_FILE_PATH, ret);
 		return ret;
 	}
 
 	written = fs_write(&file, vbuf->buffer, vbuf->bytesused);
 	if (written < 0) {
-		LOG_ERR("Failed to write %s: %d", path, (int)written);
+		LOG_ERR("Failed to write %s: %d",
+			CAPTURE_FILE_PATH, (int)written);
 		fs_close(&file);
 		return (int)written;
 	}
@@ -140,253 +169,101 @@ static int write_capture_to_file(struct video_buffer *vbuf, int index,
 
 	if ((size_t)written < vbuf->bytesused) {
 		LOG_ERR("Short write to %s: %d of %u bytes (disk full?)",
-			path, (int)written, vbuf->bytesused);
+			CAPTURE_FILE_PATH, (int)written, vbuf->bytesused);
 		return -ENOSPC;
 	}
 
-	LOG_INF("Wrote %d bytes to %s", (int)written, path);
+	LOG_INF("Wrote %d bytes to %s", (int)written, CAPTURE_FILE_PATH);
 	return 0;
 }
 
 int main(void)
 {
-	struct video_buffer *buffers[N_VID_BUFF], *vbuf;
 	struct video_format fmt = { 0 };
 	struct video_caps caps;
 	const struct device *video;
-	enum video_endpoint_id ep;
-	char fcc[5];
+	struct video_buffer *buf;
+	struct usbd_context *sample_usbd;
 	size_t bsize;
-	int i;
 	int ret;
+	int i = 0;
 
-#if ISP_ENABLED
-	video = DEVICE_DT_GET_ONE(vsi_isp_pico);
-#else
 	video = DEVICE_DT_GET_ONE(alif_cam);
-#endif
 
 	if (!device_is_ready(video)) {
 		LOG_ERR("%s: device not ready.", video->name);
 		return -1;
 	}
-	LOG_INF("Device: %s", video->name);
+	LOG_INF("- Device name: %s", video->name);
 
-	if (IS_ENABLED(ISP_ENABLED)) {
-		ep = VIDEO_EP_IN;
-	} else {
-		ep = VIDEO_EP_OUT;
+	{
+		uint8_t chip_rev = 0;
+		int rev_ret = video_get_ctrl(video, VIDEO_OV5640_CID_CHIP_REVISION,
+					     &chip_rev);
+
+		if (rev_ret) {
+			LOG_WRN("Unable to read OV5640 chip revision: %d", rev_ret);
+		} else {
+			const char *proc;
+
+			switch (chip_rev >> 4) {
+			case 0xA:
+				proc = "FSI";
+				break;
+			case 0xB:
+				proc = "BSI";
+				break;
+			default:
+				proc = "unknown";
+				break;
+			}
+			LOG_INF("- OV5640 reg 0x302A = 0x%02x "
+				"(process %s, revision %u)",
+				chip_rev, proc, chip_rev & 0x0F);
+		}
 	}
 
-	/* Get capabilities and select format */
-	if (video_get_caps(video, ep, &caps)) {
+	if (video_get_caps(video, VIDEO_EP_OUT, &caps)) {
 		LOG_ERR("Unable to retrieve video capabilities");
 		return -1;
 	}
 
-	i = 0;
 	while (caps.format_caps[i].pixelformat) {
 		const struct video_format_cap *fcap = &caps.format_caps[i];
 
-		LOG_INF("  %s %ux%u - %ux%u",
-			fourcc_str(fcap->pixelformat, fcc),
-			fcap->width_min, fcap->height_min,
-			fcap->width_max, fcap->height_max);
-
-		if (fcap->pixelformat == PIPELINE_FORMAT) {
-			fmt.pixelformat = PIPELINE_FORMAT;
-			if (IS_ENABLED(CONFIG_DT_HAS_HIMAX_HM0360_ENABLED)) {
-				fmt.width = 320;
-				fmt.height = 240;
-			} else if (IS_ENABLED(CONFIG_DT_HAS_OVTI_OV5640_ENABLED)) {
-				fmt.width = 2592;
-				fmt.height = 1944;
-			} else {
-				fmt.width = fcap->width_min;
-				fmt.height = fcap->height_min;
-			}
+		if (fcap->pixelformat == VIDEO_PIX_FMT_JPEG) {
+			fmt.pixelformat = VIDEO_PIX_FMT_JPEG;
+			fmt.width = 2592;
+			fmt.height = 1944;
 		}
 		i++;
 	}
 
 	if (fmt.pixelformat == 0) {
-		LOG_ERR("Desired pixel format not supported");
+		LOG_ERR("JPEG pixel format not advertised by sensor.");
 		return -1;
 	}
 
-	fmt.pitch = fourcc_to_pitch(fmt.pixelformat, fmt.width);
+	fmt.pitch = fmt.width;
 
-	ret = video_set_format(video, ep, &fmt);
+	ret = video_set_format(video, VIDEO_EP_OUT, &fmt);
 	if (ret) {
 		LOG_ERR("Failed to set video format: %d", ret);
 		return -1;
 	}
+	LOG_INF("- format: JPEG %ux%u", fmt.width, fmt.height);
 
-#if ISP_ENABLED
-	fmt.pixelformat = OUTPUT_FORMAT;
-	fmt.width = 480;
-	fmt.height = 480;
-	fmt.pitch = fourcc_to_pitch(fmt.pixelformat, fmt.width);
+	bsize = MIN((size_t)JPEG_CAPTURE_MAX_BYTES,
+		    (size_t)fmt.width * fmt.height);
 
-	ret = video_set_format(video, VIDEO_EP_OUT, &fmt);
-	if (ret) {
-		LOG_ERR("Failed to set ISP output format: %d", ret);
+	buf = video_buffer_alloc(bsize, K_NO_WAIT);
+	if (buf == NULL) {
+		LOG_ERR("Unable to alloc video buffer");
 		return -1;
 	}
-#endif
+	LOG_INF("- capture buffer: %zu bytes at 0x%08x",
+		bsize, (uint32_t)buf->buffer);
 
-	if (fmt.pixelformat == VIDEO_PIX_FMT_JPEG) {
-		/*
-		 * Bound JPEG capture buffer to avoid allocating an uncompressed-sized frame.
-		 * Tune this value if your quality settings produce larger compressed frames.
-		 */
-		bsize = MIN((size_t)JPEG_CAPTURE_MAX_BYTES, (size_t)fmt.width * fmt.height);
-	} else {
-		bsize = fmt.pitch * fmt.height;
-	}
-	LOG_INF("Format: %s %ux%u, pitch %u, buffer %u bytes",
-		fourcc_str(fmt.pixelformat, fcc),
-		fmt.width, fmt.height, fmt.pitch, bsize);
-
-	/* Allocate video buffers and enqueue */
-	for (i = 0; i < ARRAY_SIZE(buffers); i++) {
-		buffers[i] = video_buffer_aligned_alloc(bsize, 8, K_NO_WAIT);
-		if (buffers[i] == NULL) {
-			LOG_ERR("Unable to alloc video buffer");
-			return -1;
-		}
-		//memset(buffers[i]->buffer, 0, bsize);
-		video_enqueue(video, VIDEO_EP_OUT, buffers[i]);
-	}
-
-	/*
-	 * Delay needed for some sensors (e.g. mt9m114) to stabilize
-	 * after configuration.
-	 */
-	//k_msleep(7000);
-
-#ifdef CONFIG_DT_HAS_HIMAX_HM0360_ENABLED
-	uint32_t num_frames = 1;
-
-	ret = video_set_ctrl(video, VIDEO_CID_SNAPSHOT_CAPTURE, &num_frames);
-	if (ret) {
-		LOG_INF("Snapshot mode not supported");
-	}
-#endif
-
-	/* Start capture */
-	ret = video_stream_start(video);
-	if (ret) {
-		LOG_ERR("Unable to start capture: %d", ret);
-		return -1;
-	}
-	LOG_INF("Capture started, waiting for frame...");
-
-#ifdef CONFIG_DT_HAS_OVTI_OV5640_ENABLED
-	/*
-	 * JPEG capture: the CPI driver stops capture on the 2nd VSYNC
-	 * (end-of-frame) and moves the buffer to fifo_out.  We block on
-	 * video_dequeue until that happens, then scan the buffer once
-	 * for the JPEG EOI marker to determine the actual compressed size.
-	 *
-	 * To avoid false-matching an EOI inside an EXIF thumbnail, we
-	 * parse past the SOS (Start of Scan) marker and only scan the
-	 * entropy-coded data.  JPEG byte-stuffing guarantees 0xFF 0xD9
-	 * cannot appear as a false positive within compressed data.
-	 */
-	ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
-	if (ret) {
-		LOG_ERR("Unable to dequeue video buf: %d", ret);
-		return -1;
-	}
-	LOG_INF("Frame captured, scanning for JPEG EOI...");
-
-	{
-		uint8_t *buf = vbuf->buffer;
-		int jpeg_size = -1;
-		int scan_from = 2;
-
-		/* Verify SOI marker (0xFF 0xD8) */
-		if (buf[0] != 0xFF || buf[1] != 0xD8) {
-			LOG_ERR("No JPEG SOI marker (got %02x %02x)",
-				buf[0], buf[1]);
-			return -1;
-		}
-
-		/* Parse marker segments to skip past SOS (0xFF 0xDA) */
-		{
-			int pos = 2;
-
-			while (pos < (int)bsize - 3) {
-				if (buf[pos] != 0xFF) {
-					break;
-				}
-				uint8_t marker = buf[pos + 1];
-
-				if (marker == 0xDA) {
-					uint16_t seg_len =
-						((uint16_t)buf[pos + 2] << 8)
-						| buf[pos + 3];
-					scan_from = pos + 2 + seg_len;
-					break;
-				}
-				/* Standalone markers (no length field) */
-				if (marker == 0x00 || marker == 0x01 ||
-				    (marker >= 0xD0 && marker <= 0xD9)) {
-					pos += 2;
-					continue;
-				}
-				/* Variable-length marker — skip */
-				uint16_t seg_len =
-					((uint16_t)buf[pos + 2] << 8)
-					| buf[pos + 3];
-				pos += 2 + seg_len;
-			}
-		}
-
-		/* Scan entropy data for EOI marker (0xFF 0xD9) */
-		for (int j = scan_from; j < (int)bsize - 1; j++) {
-			if (buf[j] == 0xFF && buf[j + 1] == 0xD9) {
-				jpeg_size = j + 2;
-				break;
-			}
-		}
-
-		if (jpeg_size > 0) {
-			LOG_INF("JPEG EOI at offset %d (%d KB)",
-				jpeg_size, jpeg_size / 1024);
-			vbuf->bytesused = jpeg_size;
-		} else {
-			LOG_ERR("JPEG EOI not found in %zu byte buffer", bsize);
-			LOG_INF("First 16 bytes: %02x %02x %02x %02x %02x %02x "
-				"%02x %02x %02x %02x %02x %02x %02x %02x "
-				"%02x %02x",
-				buf[0], buf[1], buf[2], buf[3],
-				buf[4], buf[5], buf[6], buf[7],
-				buf[8], buf[9], buf[10], buf[11],
-				buf[12], buf[13], buf[14], buf[15]);
-			return -1;
-		}
-	}
-#else
-	/* Dequeue one frame */
-	ret = video_dequeue(video, VIDEO_EP_OUT, &vbuf, K_FOREVER);
-	if (ret) {
-		LOG_ERR("Unable to dequeue video buf: %d", ret);
-		return -1;
-	}
-	LOG_INF("Got frame! size: %u bytes, timestamp: %u ms",
-		vbuf->bytesused, vbuf->timestamp);
-
-	/* Stop capture */
-	video_flush(video, VIDEO_EP_OUT, false);
-	ret = video_stream_stop(video);
-	if (ret) {
-		LOG_ERR("Unable to stop capture: %d", ret);
-	}
-#endif
-
-	/* Mount FAT filesystem on RAM disk */
 	ret = fs_mount(&fs_mnt);
 	if (ret) {
 		LOG_ERR("Failed to mount FAT filesystem: %d", ret);
@@ -394,17 +271,15 @@ int main(void)
 	}
 	LOG_INF("FAT filesystem mounted on %s", fs_mnt.mnt_point);
 
-	/* Write captured frame to file */
-	const char *file_ext = (fmt.pixelformat == VIDEO_PIX_FMT_JPEG) ? "jpg" : "bin";
-
-	ret = write_capture_to_file(vbuf, 0, file_ext);
+	ret = capture_one_jpeg(video, buf, bsize);
 	if (ret) {
-		LOG_ERR("Failed to write capture file");
-		return -1;
+		return ret;
 	}
 
-	/* Enable USB mass storage - host will see the RAM disk */
-	struct usbd_context *sample_usbd;
+	ret = write_capture_to_file(buf);
+	if (ret) {
+		return ret;
+	}
 
 	sample_usbd = sample_usbd_init_device(NULL);
 	if (sample_usbd == NULL) {
@@ -417,10 +292,8 @@ int main(void)
 		LOG_ERR("Failed to enable USB: %d", ret);
 		return -1;
 	}
-
-	LOG_INF("USB mass storage enabled. Connect USB to read captured image.");
-	LOG_INF("The file 'cap_0.%s' contains the %s %ux%u image.",
-		file_ext, fourcc_str(fmt.pixelformat, fcc), fmt.width, fmt.height);
+	LOG_INF("USB mass storage enabled — %s available on host.",
+		CAPTURE_FILE_PATH);
 
 	return 0;
 }
@@ -430,51 +303,38 @@ static int app_set_parameters(void)
 	run_profile_t runp = { 0 };
 	int ret;
 
-#if (DT_NODE_HAS_STATUS(DT_NODELABEL(camera_select), okay))
-	const struct gpio_dt_spec sel =
-		GPIO_DT_SPEC_GET(DT_NODELABEL(camera_select), select_gpios);
-
-	gpio_pin_configure_dt(&sel, GPIO_OUTPUT);
-	gpio_pin_set_dt(&sel, 1);
-#endif
-
-	runp.power_domains = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
-	runp.dcdc_voltage  = 825;
-	runp.dcdc_mode     = DCDC_MODE_PWM;
-	runp.aon_clk_src   = CLK_SRC_LFXO;
-	runp.run_clk_src   = CLK_SRC_PLL;
+	runp.power_domains  = PD_SYST_MASK | PD_SSE700_AON_MASK | PD_DBSS_MASK;
+	runp.dcdc_voltage   = 825;
+	runp.dcdc_mode      = DCDC_MODE_PWM;
+	runp.aon_clk_src    = CLK_SRC_LFXO;
+	runp.run_clk_src    = CLK_SRC_PLL;
 	runp.vdd_ioflex_3V3 = IOFLEX_LEVEL_1V8;
-#if defined(CONFIG_RTSS_HP)
-	runp.cpu_clk_freq  = CLOCK_FREQUENCY_400MHZ;
-#else
-	runp.cpu_clk_freq  = CLOCK_FREQUENCY_160MHZ;
-#endif
+	runp.cpu_clk_freq   = CLOCK_FREQUENCY_160MHZ;
 
 	runp.memory_blocks = MRAM_MASK;
 #if DT_NODE_EXISTS(DT_NODELABEL(sram0))
 	runp.memory_blocks |= SRAM0_MASK;
 #endif
 
-	runp.phy_pwr_gating |= MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK |
-		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK | USB_PHY_MASK;
-	runp.ip_clock_gating = CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK | USB_MASK;
+	runp.phy_pwr_gating  = MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK |
+			       MIPI_PLL_DPHY_MASK | LDO_PHY_MASK | USB_PHY_MASK;
+	runp.ip_clock_gating = CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK |
+			       USB_MASK;
 
 	ret = se_service_set_run_cfg(&runp);
-	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);
+	if (ret) {
+		__ASSERT(false, "SE: set_run_cfg failed = %d", ret);
+		return ret;
+	}
 
-#if (DT_NODE_HAS_STATUS(DT_NODELABEL(lpcam), okay))
-
-	//This works as well (capture in 250ms), but would need changes to ACG as the picture is very dark
-	//sys_write32(0x060001, M55HE_CFG_HE_CAMERA_PIXCLK);
+	/* LPCAM pixel clock and OV5640 enable-buffer GPIO. */
 	sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
 
-#if CONFIG_DT_HAS_OVTI_OV5640_ENABLED
 	const struct gpio_dt_spec cam_enbuf =
 		GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enbuf_gpios);
 
 	gpio_pin_configure_dt(&cam_enbuf, GPIO_OUTPUT_ACTIVE);
-#endif
-#endif
+
 	return 0;
 }
 
