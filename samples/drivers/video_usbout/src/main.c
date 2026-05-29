@@ -23,6 +23,10 @@
 #include <soc_common.h>
 #include <se_service.h>
 
+#ifdef CONFIG_VIDEO_USBOUT_INTERACTIVE_CONFIG
+#include "cam_config.h"
+#endif
+
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(video_usbout, LOG_LEVEL_INF);
 
@@ -263,6 +267,10 @@ int main(void)
 	}
 	LOG_INF("- capture buffer: %zu bytes at 0x%08x",
 		bsize, (uint32_t)buf->buffer);
+
+#ifdef CONFIG_VIDEO_USBOUT_INTERACTIVE_CONFIG
+	cam_interactive_config();
+#endif
 
 	ret = fs_mount(&fs_mnt);
 	if (ret) {

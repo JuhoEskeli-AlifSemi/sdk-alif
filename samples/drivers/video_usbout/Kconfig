@@ -4,4 +4,14 @@
 # Source common USB sample options used to initialize USB device stack.
 source "samples/subsys/usb/common/Kconfig.sample_usbd"
 
+config VIDEO_USBOUT_INTERACTIVE_CONFIG
+	bool "Interactive OV5640 register configuration over UART"
+	help
+	  When enabled, the sample drops into a UART menu after sensor
+	  initialization. The menu reads back the current values of a
+	  curated set of OV5640 registers (AWB mode and R/G/B gains,
+	  AEC mode and PK exposure, AGC PK gain, JPEG Q factor) and lets
+	  the user override them register by register. Press 'c' to leave
+	  the menu and continue to capture with the chosen values.
+
 source "Kconfig.zephyr"
