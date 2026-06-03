@@ -27,7 +27,10 @@ LOG_MODULE_REGISTER(video_capture, LOG_LEVEL_INF);
 #define VIDEO_BUFFER_COUNT CONFIG_VIDEO_BUFFER_POOL_NUM_MAX
 
 #define PIPELINE_FORMAT VIDEO_PIX_FMT_Y10P
-#define N_FRAMES 3
+/* With single-buffer, driver stops CSI between frames and restart is unreliable.
+ * Limit to 1 frame in that case; double-buffering (2+) allows continuous capture.
+ */
+#define N_FRAMES (VIDEO_BUFFER_COUNT > 1 ? 3 : 1)
 
 static int fourcc_to_pitch(uint32_t fourcc, uint32_t width)
 {

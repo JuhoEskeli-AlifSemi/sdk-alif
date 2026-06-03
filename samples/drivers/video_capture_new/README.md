@@ -65,6 +65,12 @@ Use the printed `dump binary memory` commands to extract frames via debugger.
 
 ## Inspecting the dumped image
 
+ARX3A0
 ```
 ffplay -f rawvideo -pixel_format gray16le -video_size 560x560   -vf "lut=y='val*65535/1023',format=gray" raw10.bin
+```
+
+OV5675
+```
+fplay -f rawvideo -pixel_format gray16le -video_size 1296x972   -vf "lut=y='val*65535/1023',format=gray" raw_ov10.bin
 ```
