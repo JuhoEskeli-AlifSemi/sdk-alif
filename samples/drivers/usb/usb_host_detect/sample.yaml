@@ -1,0 +1,23 @@
+sample:
+  name: USB Host Device Detection
+  description: |
+    USB host mode sample that initializes the DWC3 controller in host mode,
+    detects device connection/disconnection events, and reads device descriptors.
+    Can be tested with any USB device (e.g., FTDI adapter) plugged into the
+    E8 DK USB host port.
+tests:
+  sample.drivers.usb.host_detect:
+    extra_args:
+      - DTC_OVERLAY_FILE=boards/alif_usb_host.overlay
+    integration_platforms:
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_hp
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_he
+    platform_allow:
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_hp
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_he
+      - alif_e7_dk/ae722f80f55d5xx/rtss_hp
+      - alif_e7_dk/ae722f80f55d5xx/rtss_he
+    tags:
+      - usb
+      - host
+    harness: keyboard
