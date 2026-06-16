@@ -1,0 +1,24 @@
+/*
+ * Copyright (c) 2025 Alif Semiconductor.
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * DTS overlay to enable USB host mode on Alif Ensemble DK boards.
+ * Changes compatible to "snps,dwc3-host" so the UHC driver binds
+ * instead of the UDC (device) driver.
+ * Enables USB PHY power gating via AIPM.
+ */
+
+#include <dt-bindings/misc/alif_aipm_common.h>
+
+&aipm_run_default {
+	phy-pwr-gating = <ALIF_PHY_GATE_USB_MASK>;
+};
+
+ns: &ns {
+	status = "okay";
+};
+
+zephyr_uhc0: &usb {
+	compatible = "snps,dwc3-host";
+	status = "okay";
+};
