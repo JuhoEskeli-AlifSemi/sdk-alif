@@ -375,7 +375,7 @@ int main(void)
 	bool enumerated = false;
 
 	while (true) {
-		k_sleep(K_SECONDS(2));
+		k_sleep(enumerated ? K_MSEC(100) : K_SECONDS(2));
 
 		volatile uint32_t *portsc =
 			(volatile uint32_t *)(DT_REG_ADDR(UHC_NODE) + 0x420);
@@ -453,10 +453,42 @@ int main(void)
 		} else if (!connected && enumerated) {
 			LOG_INF("Device disconnected");
 			enumerated = false;
+		} else if (connected && enumerated) {
+			/* Poll for incoming data from the USB device */
+			uint8_t rx_buf[64];
+			int rx_len = uhc_dwc3_bulk_in(uhc_dev, rx_buf,
+						      sizeof(rx_buf));
+			if (rx_len > 2) {
+				/* FTDI prepends 2 modem status bytes;
+				 * actual data starts at byte 2
+				 */
+				int data_len = rx_len - 2;
+
+				LOG_INF("RX %d data bytes:", data_len);
+				LOG_HEXDUMP_INF(&rx_buf[2], data_len, "data");
+
+				/* Echo it back out */
+				int tx_len = uhc_dwc3_bulk_out(uhc_dev,
+							       &rx_buf[2],
+							       data_len);
+				if (tx_len > 0) {
+					LOG_INF("Echoed %d bytes back", tx_len);
+				}
+			} else if (rx_len == 2) {
+				/* Modem status only, no data - ignore */
+			} else if (rx_len == 0) {
+				LOG_WRN("Bulk IN: zero length");
+			} else {
+				LOG_ERR("Bulk IN failed: %d", rx_len);
+				/* Don't spam on persistent errors */
+				k_sleep(K_SECONDS(1));
+			}
 		}
 
-		LOG_INF("Port status: PORTSC=0x%08x connected=%s",
-			ps, connected ? "yes" : "no");
+		if (!enumerated) {
+			LOG_INF("Port status: PORTSC=0x%08x connected=%s",
+				ps, connected ? "yes" : "no");
+		}
 	}
 
 	return 0;
