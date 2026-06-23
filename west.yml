@@ -17,6 +17,8 @@ manifest:
     - name: alif
       url-base: https://github.com/alifsemi
     # Other repository sources:
+    - name: juho
+      url-base: git@github.com:JuhoEskeli-AlifSemi
     - name: zephyrproject
       url-base: https://github.com/zephyrproject-rtos
     - name: armmbed
@@ -27,8 +29,9 @@ manifest:
   projects:
 
     - name: zephyr
+      remote: juho
       repo-path: zephyr_alif
-      revision: 3a2b84d96961b53431a78685c6ec0f0df4ddf347
+      revision: eacc729f4ef8699a8114c9268156a4006d53c4c7
       import:
         # In addition to the zephyr repository itself,
         # Alif SDK fetches the needed projects
