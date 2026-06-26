@@ -30,11 +30,25 @@
 LOG_MODULE_REGISTER(video_usbout, LOG_LEVEL_INF);
 
 /*
- * JPEG capture buffer size. Keep in sync with CONFIG_VIDEO_BUFFER_POOL_SZ_MAX
- * in the board .conf — that value must be this plus ~1 KB for k_heap block
- * headers / alignment overhead.
+ * JPEG capture buffer size, maximised for this board. The buffer is carved
+ * from the video pool in the NON_SECURE0 region, and the captured frame is
+ * stored on the USB RAM disk, so this value is bounded by both:
+ *   - CONFIG_VIDEO_BUFFER_POOL_SZ_MAX (board .conf) must be this plus ~1.5 KB
+ *     for k_heap block headers / alignment overhead.
+ *   - the RAM disk (.overlay) must be at least this big plus FAT overhead.
+ * Keep all three in sync. See the .overlay for the DTCM memory budget.
  */
-#define JPEG_CAPTURE_MAX_BYTES (420U * 1024U)
+#define JPEG_CAPTURE_MAX_BYTES (672U * 1024U)
+
+/*
+ * Alignment of the capture buffer in DTCM. The CPI/LPCAM driver only requires
+ * 8-byte alignment for the AXI frame address, but on enqueue it does a
+ * sys_cache_data_flush_and_invd_range() over the whole buffer. Over-aligning
+ * the start to 128 bytes (and JPEG_CAPTURE_MAX_BYTES is a multiple of 128, so
+ * the end lands on a boundary too) keeps that cache maintenance from touching
+ * the neighbouring USB buffers / heap metadata in the NON_SECURE0 region.
+ */
+#define CAPTURE_BUF_ALIGN 128U
 
 #define CAPTURE_FILE_PATH "/RAM:/capture.jpg"
 
@@ -232,7 +246,7 @@ int main(void)
 	bsize = MIN((size_t)JPEG_CAPTURE_MAX_BYTES,
 		    (size_t)fmt.width * fmt.height);
 
-	buf = video_buffer_alloc(bsize, K_NO_WAIT);
+	buf = video_buffer_aligned_alloc(bsize, CAPTURE_BUF_ALIGN, K_NO_WAIT);
 	if (buf == NULL) {
 		LOG_ERR("Unable to alloc video buffer");
 		return -1;
