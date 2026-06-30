@@ -82,8 +82,11 @@ a UVC webcam. To view the stream on Linux:
    v4l2-ctl --list-devices
    ffplay -f v4l2 -input_format mjpeg /dev/video0
 
-   # or grab a single still
-   ffmpeg -f v4l2 -input_format mjpeg -i /dev/video0 -frames:v 1 capture.jpg
+   # grab a single still
+   ffmpeg -y -f v4l2 -input_format mjpeg -video_size 2592x1944 -i /dev/video4 -frames:v 1 -c:v copy frame.jpg
+   
+   # streaming at the full 2592x1944 resolution (5 fps)
+   ffplay -f v4l2 -input_format mjpeg -video_size 2592x1944 /dev/video4
 
 Sample Output
 *************
