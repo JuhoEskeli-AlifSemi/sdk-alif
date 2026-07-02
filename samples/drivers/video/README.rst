@@ -40,9 +40,14 @@ ARX3A0 camera sensor.
 The JPEG encoder is supported only on the alif_e8 board and
 can be selected during the build process only for this target.
 
-  - The JPEG module consumes one buffer from the video buffer pool.
-    Since N_VID_BUFF requires a minimum of 2 buffers, the total buffer pool size
-    (CONFIG_VIDEO_BUFFER_POOL_NUM_MAX) must be at least 3.
+  - Capture always uses a single video buffer (N_VID_BUFF = 1).
+
+  - When the JPEG encoder is enabled, it allocates one additional buffer from
+    the video buffer pool to hold the compressed output (this is not a second
+    capture buffer). In that case the pool size
+    (CONFIG_VIDEO_BUFFER_POOL_NUM_MAX) must be at least 2: the single capture
+    buffer plus the JPEG output buffer. Without the JPEG encoder, a pool size
+    of 1 is sufficient.
 
   - For a resolution of 480 × 480 with an NV12 input format,
     the minimum required buffer size (CONFIG_VIDEO_BUFFER_POOL_SZ_MAX) is 346223 bytes.
@@ -63,6 +68,113 @@ Tested Sensors
 * MT9M114 (Parallel)
 * ARX3A0 (CSI)
 * HM0360 (CSI)
+
+Single-buffer Capture
+*********************
+
+The sample captures using a single video buffer (``N_VID_BUFF = 1``) and loops
+to acquire ``N_FRAMES`` frames (10 by default), re-enqueuing the same buffer
+after each frame. This demonstrates that continuous capture works with only one
+buffer. The buffer address is printed with every frame so the reuse of the same
+buffer is visible in the log. The behaviour is identical with and without the
+ISP in the pipeline.
+
+Building
+********
+
+The commands below build the MT9M114 selfie camera (CSI-2) application on the
+E8 DevKit. Run them from the ``zephyr`` directory. To target the M55 HE core
+instead of HP, replace ``rtss_hp`` with ``rtss_he`` in the board name.
+
+Selfie camera with ISP:
+
+.. code-block:: console
+
+   west build -p always \
+     -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp \
+     ../alif/samples/drivers/video/ \
+     -DDTC_OVERLAY_FILE="$PWD/../alif/samples/drivers/video/boards/serial_camera_mt9m114_selfie.overlay" \
+     -DOVERLAY_CONFIG="$PWD/../alif/samples/drivers/video/boards/isp.conf;$PWD/../alif/samples/drivers/video/boards/serial_camera_mt9m114.conf"
+
+
+.. note::
+
+   * ``serial_camera_mt9m114_selfie.overlay`` routes the camera through the ISP
+     and therefore requires both ``isp.conf`` and ``serial_camera_mt9m114.conf``
+     as ``OVERLAY_CONFIG``.
+   * ``serial_camera_mt9m114_selfie_noisp.overlay`` is a copy of the selfie
+     overlay with the ISP removed; the CAM controller streams directly to
+     memory. It only needs ``serial_camera_mt9m114.conf`` (do not add
+     ``isp.conf``).
+
+Displaying an ISP frame with ffmpeg/ffplay:
+
+With the ISP, each captured frame is stored as ``PRGB`` (RGB888 planar) at
+480x480. In memory the three planes are laid out as ``[R plane][G plane]
+[B plane]``, each plane being 480 x 480 = 230400 bytes (691200 bytes total).
+
+First dump one frame from the debugger using the command printed in the log,
+e.g.:
+
+.. code-block:: console
+
+   dump binary memory "/tmp/capture_0.bin" 0x02000060 0x020a8c5f -r
+
+``ffmpeg`` has no native planar-RGB input in ``R, G, B`` order; its ``gbrp``
+format expects the planes as ``G, B, R``. Reorder the planes first, then play
+or convert (plane size = 230400 bytes):
+
+.. code-block:: console
+
+   cd /tmp
+   dd if=capture_0.bin bs=230400 skip=1 count=1 status=none of=p_g.bin   # G plane
+   dd if=capture_0.bin bs=230400 skip=2 count=1 status=none of=p_b.bin   # B plane
+   dd if=capture_0.bin bs=230400 skip=0 count=1 status=none of=p_r.bin   # R plane
+   cat p_g.bin p_b.bin p_r.bin > capture_0_gbrp.bin
+
+   # View live:
+   ffplay -f rawvideo -pixel_format gbrp -video_size 480x480 capture_0_gbrp.bin
+
+   # Or save to PNG:
+   ffmpeg -f rawvideo -pixel_format gbrp -video_size 480x480 -i capture_0_gbrp.bin \
+     -frames:v 1 capture_0.png
+
+.. note::
+
+   Feeding the raw ``capture_0.bin`` directly to ``ffplay`` as ``gbrp`` without
+   reordering swaps the colour channels (the ISP plane order is ``R, G, B``, not
+   ``G, B, R``). The reorder step above is required for correct colours.
+
+Selfie camera without ISP:
+
+.. code-block:: console
+
+   west build -p always \
+     -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp \
+     ../alif/samples/drivers/video/ \
+     -DDTC_OVERLAY_FILE="$PWD/../alif/samples/drivers/video/boards/serial_camera_mt9m114_selfie_noisp.overlay" \
+     -DOVERLAY_CONFIG="$PWD/../alif/samples/drivers/video/boards/serial_camera_mt9m114.conf"
+
+Displaying a non-ISP frame with ffmpeg/ffplay:
+
+Without the ISP, the frame is the sensor's raw Bayer data in ``Y10P`` format:
+one 16-bit little-endian word per pixel with the 10-bit sample in the low bits
+(value range 0-1023), arranged as a ``GRBG`` Bayer pattern. There are no planes
+to reorder. For the 1288x728 capture above the buffer is 1288 x 728 x 2 =
+1875328 bytes.
+
+Grayscale view (simplest; shows the raw frame with its Bayer checkerboard).
+``gray10le`` scales the 10-bit values to the display range automatically, so no
+manual brightening is needed:
+
+.. code-block:: console
+
+   # View live:
+   ffplay -f rawvideo -pixel_format gray10le -video_size 1288x728 capture_0.bin
+
+   # Or save to PNG:
+   ffmpeg -f rawvideo -pixel_format gray10le -video_size 1288x728 -i capture_0.bin \
+     -frames:v 1 capture_0.png
 
 Sample Output
 *************

@@ -33,12 +33,18 @@ LOG_MODULE_REGISTER(video_app, LOG_LEVEL_INF);
 #else
 #define N_FRAMES		10
 #endif
+/*
+ * Single-buffer capture demo: use exactly ONE video buffer and loop to
+ * capture N_FRAMES images, re-enqueuing the same buffer after each frame.
+ * This behaves identically with and without the ISP in the pipeline.
+ */
+#define N_VID_BUFF              1
+
 #if JPEG_ENABLED
-/* Jpeg output buffer needs one buffer. So allocate 1 less here */
-BUILD_ASSERT(CONFIG_VIDEO_BUFFER_POOL_NUM_MAX >= 3, "Insufficient Video buffer pool capacity");
-#define N_VID_BUFF              MIN((CONFIG_VIDEO_BUFFER_POOL_NUM_MAX - 1), N_FRAMES)
-#else
-#define N_VID_BUFF              MIN(CONFIG_VIDEO_BUFFER_POOL_NUM_MAX, N_FRAMES)
+/* The JPEG encoder consumes one output buffer from the pool in addition to
+ * the single capture buffer.
+ */
+BUILD_ASSERT(CONFIG_VIDEO_BUFFER_POOL_NUM_MAX >= 2, "Insufficient Video buffer pool capacity");
 #endif /* JPEG_ENABLED */
 
 
@@ -529,8 +535,9 @@ int main(void)
 			return -1;
 		}
 
-		LOG_INF("Got frame %u! size: %u; timestamp %u ms",
-		       frame++, vbuf->bytesused, vbuf->timestamp);
+		LOG_INF("Got frame %u! size: %u; timestamp %u ms; buf @0x%08x",
+		       frame++, vbuf->bytesused, vbuf->timestamp,
+		       (uint32_t)vbuf->buffer);
 
 		if (last_timestamp == 0) {
 			LOG_INF("FPS: 0.0");
@@ -549,6 +556,11 @@ int main(void)
 		}
 #endif /* JPEG_ENABLED */
 
+		/*
+		 * Single buffer: re-enqueue the same buffer and restart the
+		 * pipeline to capture the next frame. Skipped after the final
+		 * frame (i == N_FRAMES - 1) so the buffer can drain.
+		 */
 		if (i < N_FRAMES - N_VID_BUFF) {
 			ret = video_enqueue(video, VIDEO_EP_OUT, vbuf);
 			if (ret) {
