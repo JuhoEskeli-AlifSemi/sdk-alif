@@ -1,0 +1,25 @@
+sample:
+  name: USB Host Mass Storage
+  description: |
+    USB host mode sample that enumerates a USB Mass Storage class device
+    (Bulk-Only Transport, SCSI transparent command set), issues the standard
+    SCSI commands (INQUIRY, TEST UNIT READY, READ CAPACITY(10), READ(10)),
+    then mounts the FAT/vfat filesystem and reads or creates an example file.
+    Tested with a USB flash drive plugged into the E8 DK USB host port.
+tests:
+  sample.drivers.usb.mass_storage:
+    extra_args:
+      - DTC_OVERLAY_FILE=boards/alif_usb_host.overlay
+    integration_platforms:
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_hp
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_he
+    platform_allow:
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_hp
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_he
+      - alif_e7_dk/ae722f80f55d5xx/rtss_hp
+      - alif_e7_dk/ae722f80f55d5xx/rtss_he
+    tags:
+      - usb
+      - host
+      - filesystem
+    harness: keyboard

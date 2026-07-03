@@ -4,17 +4,18 @@
  *
  * USB Host Device Detection Sample
  *
- * This sample initializes the DWC3 USB controller in host mode and
- * monitors for device connect/disconnect events. When a device is
- * connected it reads and prints the DWC3 GHWPARAMS, port status,
- * and SNPSID registers to verify the controller is operating in
- * host mode.
+ * This sample initializes the DWC3 USB controller in host mode and monitors
+ * for device connect/disconnect events. At startup it dumps the DWC3 / xHCI
+ * identification and port registers to verify the controller is operating in
+ * host mode. When a device is connected it enumerates it and prints the
+ * VID/PID. If the device is an FTDI USB-to-serial adapter it is configured for
+ * 8N1 serial (see ftdi.c) and the sample runs a simple bulk IN/OUT echo loop.
  *
  * How to test:
  *   1. Build for E8 DK HP or HE core with the overlay
  *   2. Flash and open the serial console
  *   3. Plug a USB device (e.g., FTDI adapter) into the DK USB port
- *   4. Observe connection detection logs
+ *   4. Observe connection detection and enumeration logs
  */
 
 #include <zephyr/kernel.h>
@@ -26,9 +27,9 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usb_host_sample, LOG_LEVEL_INF);
 
+#include "ftdi.h"
+
 /* From the UHC DWC3 driver */
-int uhc_dwc3_enumerate_device(const struct device *dev,
-			      struct usb_device_descriptor *desc);
 int uhc_dwc3_setup_device(const struct device *dev,
 			  struct usb_device_descriptor *desc,
 			  uint8_t *out_bulk_in_ep,
@@ -37,146 +38,6 @@ int uhc_dwc3_bulk_out(const struct device *dev,
 		      const uint8_t *data, size_t len);
 int uhc_dwc3_bulk_in(const struct device *dev,
 		     uint8_t *data, size_t len);
-
-/* Generic control transfer (exposed from driver) */
-int uhc_dwc3_control_transfer(const struct device *dev,
-			      uint8_t bmRequestType,
-			      uint8_t bRequest,
-			      uint16_t wValue,
-			      uint16_t wIndex,
-			      uint16_t wLength,
-			      void *data);
-
-/* ---- FTDI vendor-specific requests ---- */
-#define FTDI_VID			0x0403
-#define FTDI_SIO_RESET			0x00
-#define FTDI_SIO_SET_MODEM_CTRL		0x01
-#define FTDI_SIO_SET_FLOW_CTRL		0x02
-#define FTDI_SIO_SET_BAUDRATE		0x03
-#define FTDI_SIO_SET_DATA		0x04
-#define FTDI_SIO_SET_LATENCY_TIMER	0x09
-
-/* FTDI request type: vendor, host-to-device, interface recipient */
-#define FTDI_REQTYPE_OUT	0x40
-
-/* FTDI data format: 8 data bits, no parity, 1 stop bit */
-#define FTDI_DATA_8N1		0x0008
-
-/* FTDI modem ctrl: DTR=1, RTS=1 */
-#define FTDI_DTR_ON		0x0101
-#define FTDI_RTS_ON		0x0202
-
-/*
- * FTDI baud rate divisor calculation for FT232R:
- * Base clock = 3,000,000 Hz
- * Divisor = 3000000 / baud
- * wValue = divisor & 0xFFFF
- * wIndex = (divisor >> 16) & 0xFFFF  (sub-integer bits)
- *
- * Common values:
- *   9600:   divisor = 0x4138 (312.5 -> encoded as 312 + 0.5)
- *   115200: divisor = 0x001A (26)
- */
-static int ftdi_set_baudrate(const struct device *dev, uint32_t baudrate)
-{
-	uint16_t wValue, wIndex;
-
-	switch (baudrate) {
-	case 9600:
-		wValue = 0x4138;
-		wIndex = 0x0000;
-		break;
-	case 19200:
-		wValue = 0x809C;
-		wIndex = 0x0000;
-		break;
-	case 38400:
-		wValue = 0xC04E;
-		wIndex = 0x0000;
-		break;
-	case 57600:
-		wValue = 0x0034;
-		wIndex = 0x0000;
-		break;
-	case 115200:
-		wValue = 0x001A;
-		wIndex = 0x0000;
-		break;
-	default:
-		LOG_ERR("Unsupported baud rate: %u", baudrate);
-		return -EINVAL;
-	}
-
-	return uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					 FTDI_SIO_SET_BAUDRATE,
-					 wValue, wIndex, 0, NULL);
-}
-
-static int ftdi_init(const struct device *dev, uint32_t baudrate)
-{
-	int ret;
-
-	LOG_INF("FTDI: Reset");
-	ret = uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					FTDI_SIO_RESET, 0, 0, 0, NULL);
-	if (ret < 0) {
-		LOG_ERR("FTDI reset failed: %d", ret);
-		return ret;
-	}
-
-	LOG_INF("FTDI: Set baud rate %u", baudrate);
-	ret = ftdi_set_baudrate(dev, baudrate);
-	if (ret < 0) {
-		LOG_ERR("FTDI set baudrate failed: %d", ret);
-		return ret;
-	}
-
-	LOG_INF("FTDI: Set data format 8N1");
-	ret = uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					FTDI_SIO_SET_DATA,
-					FTDI_DATA_8N1, 0, 0, NULL);
-	if (ret < 0) {
-		LOG_ERR("FTDI set data failed: %d", ret);
-		return ret;
-	}
-
-	LOG_INF("FTDI: Disable flow control");
-	ret = uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					FTDI_SIO_SET_FLOW_CTRL,
-					0, 0, 0, NULL);
-	if (ret < 0) {
-		LOG_ERR("FTDI set flow ctrl failed: %d", ret);
-		return ret;
-	}
-
-	LOG_INF("FTDI: Set DTR+RTS");
-	ret = uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					FTDI_SIO_SET_MODEM_CTRL,
-					FTDI_DTR_ON, 0, 0, NULL);
-	if (ret < 0) {
-		LOG_ERR("FTDI set DTR failed: %d", ret);
-		return ret;
-	}
-	ret = uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					FTDI_SIO_SET_MODEM_CTRL,
-					FTDI_RTS_ON, 0, 0, NULL);
-	if (ret < 0) {
-		LOG_ERR("FTDI set RTS failed: %d", ret);
-		return ret;
-	}
-
-	LOG_INF("FTDI: Set latency timer to 16ms");
-	ret = uhc_dwc3_control_transfer(dev, FTDI_REQTYPE_OUT,
-					FTDI_SIO_SET_LATENCY_TIMER,
-					16, 0, 0, NULL);
-	if (ret < 0) {
-		LOG_ERR("FTDI set latency failed: %d", ret);
-		return ret;
-	}
-
-	LOG_INF("FTDI initialized at %u baud, 8N1", baudrate);
-	return 0;
-}
 
 /* Get the UHC device from devicetree - the overlay creates the zephyr_uhc0 label */
 #define UHC_NODE DT_NODELABEL(zephyr_uhc0)
@@ -189,7 +50,7 @@ static const struct device *uhc_dev = DEVICE_DT_GET(UHC_NODE);
 
 USBH_CONTROLLER_DEFINE(sample_uhs_ctx, DEVICE_DT_GET(UHC_NODE));
 
-/* Event callback - receives UHC events and queues them */
+/* Event callback - logs UHC connect/disconnect and transfer events */
 static int usb_host_event_cb(const struct device *dev,
 			     const struct uhc_event *const event)
 {
