@@ -22,22 +22,13 @@
 #include <zephyr/device.h>
 #include <zephyr/usb/usbh.h>
 #include <zephyr/drivers/usb/uhc.h>
+#include <zephyr/drivers/usb/uhc_dwc3.h>
 #include <zephyr/sys/byteorder.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usb_host_sample, LOG_LEVEL_INF);
 
 #include "ftdi.h"
-
-/* From the UHC DWC3 driver */
-int uhc_dwc3_setup_device(const struct device *dev,
-			  struct usb_device_descriptor *desc,
-			  uint8_t *out_bulk_in_ep,
-			  uint8_t *out_bulk_out_ep);
-int uhc_dwc3_bulk_out(const struct device *dev,
-		      const uint8_t *data, size_t len);
-int uhc_dwc3_bulk_in(const struct device *dev,
-		     uint8_t *data, size_t len);
 
 /* Get the UHC device from devicetree - the overlay creates the zephyr_uhc0 label */
 #define UHC_NODE DT_NODELABEL(zephyr_uhc0)
