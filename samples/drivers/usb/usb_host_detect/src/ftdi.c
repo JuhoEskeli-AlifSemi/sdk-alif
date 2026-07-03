@@ -7,20 +7,12 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/device.h>
+#include <zephyr/drivers/usb/uhc_dwc3.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(ftdi, LOG_LEVEL_INF);
 
 #include "ftdi.h"
-
-/* Generic EP0 control transfer, exposed by the UHC DWC3 driver. */
-int uhc_dwc3_control_transfer(const struct device *dev,
-			      uint8_t bmRequestType,
-			      uint8_t bRequest,
-			      uint16_t wValue,
-			      uint16_t wIndex,
-			      uint16_t wLength,
-			      void *data);
 
 /* ---- FTDI vendor-specific requests ---- */
 #define FTDI_SIO_RESET			0x00

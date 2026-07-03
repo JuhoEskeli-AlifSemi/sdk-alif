@@ -27,6 +27,7 @@
 #include <zephyr/device.h>
 #include <zephyr/usb/usbh.h>
 #include <zephyr/drivers/usb/uhc.h>
+#include <zephyr/drivers/usb/uhc_dwc3.h>
 #include <zephyr/sys/byteorder.h>
 
 #include "audio_gen.h"
@@ -34,26 +35,6 @@
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usb_audio_host, LOG_LEVEL_INF);
 
-/* From the UHC DWC3 driver */
-int uhc_dwc3_enumerate_device(const struct device *dev,
-			      struct usb_device_descriptor *desc);
-int uhc_dwc3_control_transfer(const struct device *dev,
-			      uint8_t bmRequestType,
-			      uint8_t bRequest,
-			      uint16_t wValue,
-			      uint16_t wIndex,
-			      uint16_t wLength,
-			      void *data);
-int uhc_dwc3_configure_isoch(const struct device *dev,
-			     uint8_t isoch_out_ep,
-			     uint8_t isoch_in_ep,
-			     uint16_t out_mps,
-			     uint16_t in_mps);
-int uhc_dwc3_isoch_out(const struct device *dev,
-		       const uint8_t *data, size_t len);
-int uhc_dwc3_isoch_start(const struct device *dev, size_t out_frame_size,
-			 size_t in_frame_size);
-int uhc_dwc3_isoch_loopback(const struct device *dev);
 /* Get the UHC device from devicetree */
 #define UHC_NODE DT_NODELABEL(zephyr_uhc0)
 
