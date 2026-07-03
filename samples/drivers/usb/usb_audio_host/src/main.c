@@ -7,8 +7,9 @@
  * Enumerates a USB audio headset (headphone + mic), configures its
  * isochronous endpoints, and streams audio.
  *
- * Test mode: plays an embedded audio clip (C major arpeggio) in a loop
- * to verify the speaker OUT path works correctly.
+ * The playback source is selectable via TEST_MODE in audio_gen.h (embedded
+ * clip, silence, 440 Hz tone, or the default live mic->speaker loopback).
+ * The clip/silence/tone frame generators live in audio_gen.c.
  *
  * To replace the test clip with your own WAV file:
  *   cd alif/samples/drivers/usb/usb_audio_host
@@ -28,7 +29,7 @@
 #include <zephyr/drivers/usb/uhc.h>
 #include <zephyr/sys/byteorder.h>
 
-#include "audio_clip.h"
+#include "audio_gen.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usb_audio_host, LOG_LEVEL_INF);
@@ -50,12 +51,6 @@ int uhc_dwc3_configure_isoch(const struct device *dev,
 			     uint16_t in_mps);
 int uhc_dwc3_isoch_out(const struct device *dev,
 		       const uint8_t *data, size_t len);
-int uhc_dwc3_isoch_in(const struct device *dev,
-		      uint8_t *data, size_t len);
-int uhc_dwc3_isoch_stream(const struct device *dev,
-			  const uint8_t *out_data, size_t out_len,
-			  uint8_t *in_data, size_t in_len,
-			  int *out_ret, int *in_ret);
 int uhc_dwc3_isoch_start(const struct device *dev, size_t out_frame_size,
 			 size_t in_frame_size);
 int uhc_dwc3_isoch_loopback(const struct device *dev);
@@ -194,59 +189,6 @@ static int parse_audio_config(const uint8_t *desc, int len,
 	return 0;
 }
 
-/*
- * Generate a 440 Hz sine wave as signed 16-bit PCM, stereo, 48kHz.
- * One frame = 48 samples * 2 channels * 2 bytes = 192 bytes.
- *
- * Uses a small lookup table (no floating point needed).
- */
-
-/* 48 samples of one period of 440 Hz at 48kHz (48000/440 ≈ 109 samples
- * per full period, so at 48 samples per 1ms frame we get ~0.44 periods
- * per frame). Pre-computed 16-bit sine values.
- */
-static const int16_t sine_table[48] = {
-	0,     2139,  4240,  6270,  8192,  9974, 11585, 12998,
-	14189, 15137, 15826, 16244, 16384, 16244, 15826, 15137,
-	14189, 12998, 11585, 9974,  8192,  6270,  4240,  2139,
-	0,    -2139, -4240, -6270, -8192, -9974,-11585,-12998,
-	-14189,-15137,-15826,-16244,-16384,-16244,-15826,-15137,
-	-14189,-12998,-11585, -9974, -8192, -6270, -4240, -2139,
-};
-
-/* Phase index into the sine table (wraps around at the period length) */
-static int sine_phase;
-
-/*
- * The actual period of 440 Hz at 48kHz is 109.09 samples.
- * We use a simple phase accumulator with the table as one waveform period.
- * Table has 48 entries representing one approximate cycle.
- * To get closer to 440 Hz: advance phase by 48/109.09 ≈ 0.44 per sample.
- * Using fixed point: advance = 48 * 256 / 109 = 112 (in 8.8 fixed point).
- */
-#define SINE_PERIOD	109  /* samples per 440 Hz period at 48kHz */
-#define SINE_TABLE_LEN	48
-
-static void generate_tone_frame(uint8_t *buf, int num_samples, int channels)
-{
-	int16_t *samples = (int16_t *)buf;
-
-	for (int i = 0; i < num_samples; i++) {
-		/* Map phase (0..SINE_PERIOD-1) to table index (0..47) */
-		int idx = (sine_phase * SINE_TABLE_LEN) / SINE_PERIOD;
-		int16_t val = sine_table[idx];
-
-		for (int ch = 0; ch < channels; ch++) {
-			*samples++ = val;
-		}
-
-		sine_phase++;
-		if (sine_phase >= SINE_PERIOD) {
-			sine_phase = 0;
-		}
-	}
-}
-
 int main(void)
 {
 	int err;
@@ -296,20 +238,16 @@ int main(void)
 				continue;
 			}
 
-			/* Playback test modes — set TEST_MODE to isolate the
-			 * source of audio artifacts:
-			 *   0 = play embedded clip (arpeggio)
-			 *   1 = pure silence (all zeros)
-			 *   2 = steady 440 Hz tone (no clip, no loop point)
-			 *   3 = mic -> speaker loopback (live)
+			/* Playback source is selected by TEST_MODE in
+			 * audio_gen.h. Loopback (the default) is pumped by the
+			 * driver; the clip/silence/tone modes generate frames
+			 * via audio_gen_next().
 			 */
-#define TEST_MODE 3
-
-#if TEST_MODE == 3
+#if TEST_MODE == AUDIO_MODE_LOOPBACK
 			/* Live loopback: the driver pumps mic IN -> speaker OUT
 			 * each frame, dispatching both endpoints' completions
 			 * off the shared event ring. The mic's async sample
-			 * count drives the speaker rate, so no SHED is needed.
+			 * count drives the speaker rate, so no shedding is needed.
 			 */
 			int lb_ret = uhc_dwc3_isoch_loopback(uhc_dev);
 
@@ -333,85 +271,12 @@ int main(void)
 			}
 
 			continue;
-#endif
-
-			/* Rate-adaptation (all modes):
-			 * Host frame rate measured at ~1008.6 frames/s, but the
-			 * headset DAC consumes a true 48000 samples/s. Delivering
-			 * a flat 48 samples/frame overflows its FIFO ≈ every
-			 * 0.4 s → the click. We must shed ~0.41 samples/frame.
-			 *
-			 * Fractional accumulator: add SHED_MILLISAMPLES each
-			 * frame; when it reaches >=1000, send 47 samples instead
-			 * of 48 and carry the remainder. This yields an exact
-			 * average of (48 - SHED_MILLISAMPLES/1000) samples/frame.
-			 *
-			 * Tune SHED_MILLISAMPLES to kill the click:
-			 *   0   = baseline (48.000/frame, clicks ~0.4 s)
-			 *   410 = 47.590/frame  (confirmed click-free)
-			 * If clicks reappear faster → too high (underflow);
-			 * if slow clicks remain → too low (residual overflow).
-			 */
-#define SHED_MILLISAMPLES 410
-
-#if TEST_MODE != 3
-			static int clip_offset;
-			static uint8_t frame_buf[192];
-			const uint8_t *frame_ptr;
-
-			/* Number of stereo sample-frames to send this USB frame.
-			 * Shared accumulator slows the effective rate to match
-			 * the device DAC clock.
-			 */
-			int nsamp = 48;
-#if SHED_MILLISAMPLES > 0
-			static int shed_acc;
-
-			shed_acc += SHED_MILLISAMPLES;
-			if (shed_acc >= 1000) {
-				shed_acc -= 1000;
-				nsamp = 47; /* shed one sample this frame */
-			}
-#endif
-			size_t frame_bytes = (size_t)nsamp * 2 * AUDIO_CLIP_CHANNELS;
-
-#if TEST_MODE == 0
-			/* Copy nsamp stereo frames from the clip, with wrap. */
-			{
-				int16_t *d = (int16_t *)frame_buf;
-				int total = AUDIO_CLIP_NUM_FRAMES *
-					    AUDIO_CLIP_CHANNELS;
-
-				for (int i = 0; i < nsamp * AUDIO_CLIP_CHANNELS;
-				     i++) {
-					d[i] = audio_clip_data[clip_offset++];
-					if (clip_offset >= total) {
-						clip_offset = 0;
-					}
-				}
-			}
-			frame_ptr = frame_buf;
-#elif TEST_MODE == 1
-			memset(frame_buf, 0, frame_bytes);
-			frame_ptr = frame_buf;
 #else
-			/* Steady 440 Hz tone — continuous phase, no boundaries */
-			static int phase;
-			int16_t *s = (int16_t *)frame_buf;
-
-			for (int i = 0; i < nsamp; i++) {
-				int idx = (phase * 48) / 109;
-				int16_t v = sine_table[idx];
-
-				s[i * 2] = v;
-				s[i * 2 + 1] = v;
-				phase++;
-				if (phase >= 109) {
-					phase = 0;
-				}
-			}
-			frame_ptr = frame_buf;
-#endif
+			/* Generate one playback frame (clip / silence / tone)
+			 * with rate shedding applied - see audio_gen.c.
+			 */
+			size_t frame_bytes;
+			const uint8_t *frame_ptr = audio_gen_next(&frame_bytes);
 
 			int ret = uhc_dwc3_isoch_out(uhc_dev, frame_ptr,
 						     frame_bytes);
@@ -437,7 +302,7 @@ int main(void)
 			}
 
 			continue;
-#endif /* TEST_MODE != 3 */
+#endif
 		}
 
 		k_sleep(K_SECONDS(2));
@@ -571,8 +436,7 @@ int main(void)
 			continue;
 		}
 
-		LOG_INF("Audio streaming ready! Playing 440 Hz test tone...");
-		sine_phase = 0;
+		LOG_INF("Audio streaming ready!");
 
 		/* Prime the isoch rings with silence frames */
 		err = uhc_dwc3_isoch_start(uhc_dev, acfg.spk_mps,
