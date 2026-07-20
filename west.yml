@@ -16,6 +16,8 @@ manifest:
   remotes:
     - name: alif
       url-base: https://github.com/alifsemi
+    - name: juho
+      url-base: https://github.com/JuhoEskeli-AlifSemi
     # Other repository sources:
     - name: zephyrproject
       url-base: https://github.com/zephyrproject-rtos
@@ -27,8 +29,9 @@ manifest:
   projects:
 
     - name: zephyr
+      remote: juho
       repo-path: zephyr_alif
-      revision: 0c8c78c5094c47a826d65ca934efcdaa5f734350
+      revision: 4034a4e5fc047e57c0ca927c0ba319f90ba599c2
       import:
         # In addition to the zephyr repository itself,
         # Alif SDK fetches the needed projects
@@ -76,6 +79,16 @@ manifest:
     - name: cmsis_alif
       revision: 85f6b92af0f6ac72594d391f895c45cc30847e41
       path: modules/hal/cmsis
+      groups:
+         - hal
+
+    # Override the hal_alif revision imported from the zephyr manifest
+    # to point at the fork containing the ADC LDO/bandgap calibration fix.
+    - name: hal_alif
+      remote: juho
+      repo-path: hal_alif
+      revision: 1bd5698e28d698f31cdc1230e6bbba8dd5b9a55b
+      path: modules/hal/alif
       groups:
          - hal
 
