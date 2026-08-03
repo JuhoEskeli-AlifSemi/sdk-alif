@@ -570,7 +570,8 @@ static int app_set_parameters(void)
 	sys_write32(0x080001, M55HE_CFG_HE_CAMERA_PIXCLK);
 
 	const struct gpio_dt_spec cam_enbuf =
-		GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enbuf_gpios);
+		//GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enbuf_gpios);
+		GPIO_DT_SPEC_GET(DT_NODELABEL(cam_enbuf), enable_gpios);
 
 	gpio_pin_configure_dt(&cam_enbuf, GPIO_OUTPUT_ACTIVE);
 

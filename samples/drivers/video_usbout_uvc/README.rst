@@ -53,24 +53,31 @@ Implementation notes:
 Requirements
 ************
 
-* Alif E1C SK board with a populated OV5640 module.
+* Alif E1C SK or B1 SK board with a populated OV5640 module.
 * USB cable from the board to a host PC.
 
-Supported Target
-****************
+Supported Targets
+*****************
 
 * ``alif_e1c_sk/ae1c1f4051920hh/rtss_he``
+* ``alif_b1_sk/ab1c1f4m51820ph0/rtss_he``
 
-This sample is intentionally not portable to other Alif boards or sensors —
-the run profile, pinctrl, ``cam_enbuf`` GPIO and JPEG snapshot path are
-all OV5640 + E1C SK specific.
+Both SK boards wire the OV5640 to the LP-CAM parallel bus identically, so the
+sample uses the same run profile, pinctrl, ``cam_enbuf`` GPIO and JPEG
+snapshot path on either target. It is intentionally not portable to other
+Alif boards or sensors.
 
 Building and Running
 ********************
 
 .. code-block:: console
 
+   # E1C SK
    west build -b alif_e1c_sk/ae1c1f4051920hh/rtss_he alif/samples/drivers/video_usbout
+   west flash
+
+   # B1 SK
+   west build -b alif_b1_sk/ab1c1f4m51820ph0/rtss_he alif/samples/drivers/video_usbout
    west flash
 
 After flashing, connect the USB cable to the host PC. The board enumerates as
