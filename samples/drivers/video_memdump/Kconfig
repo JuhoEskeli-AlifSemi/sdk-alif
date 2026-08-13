@@ -1,0 +1,14 @@
+# Copyright (C) 2026 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+config VIDEO_MEMDUMP_HEX_CONSOLE
+	bool "Dump each captured JPEG as framed hex over the console"
+	default y
+	help
+	  After every capture, print the whole JPEG as hex between
+	  "==JPEG_BEGIN size=N==" / "==JPEG_END==" markers so it can be
+	  extracted from the serial log and reconstructed on the host.
+	  Disable to only log the buffer address/size (dump via debugger)
+	  and avoid the slow full-frame hex print at low clock.
+
+source "Kconfig.zephyr"
