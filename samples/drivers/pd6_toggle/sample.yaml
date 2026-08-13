@@ -1,0 +1,18 @@
+sample:
+  name: PD6 (SYSTOP) Toggle Energy Demo
+  description: >
+    Keeps the RTSS-HE core fully awake and alternately powers the SYSTOP power
+    domain (PD6) ON and OFF via SE run-profile requests, with no console, GPIO
+    or sleep. An energy analyzer on VDD_SOC then shows the current difference
+    between PD6 powered and PD6 gated.
+common:
+  tags:
+    - power
+    - pm
+    - drivers
+  filter: SOC_FAMILY_BALLETTO
+tests:
+  sample.drivers.pd6_toggle:
+    build_only: true
+    platform_allow:
+      - alif_b1_dk_rtss_he

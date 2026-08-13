@@ -1,0 +1,5 @@
+west:
+  command: /home/juhoeskeli/tunkkaus/bin/west build -b alif_b1_sk/ab1c1f4m51820ph0/rtss_he
+    -d samples/drivers/pd6_toggle
+  topdir: /home/juhoeskeli/projects/zephyr-alif-main-10112025
+  version: 1.5.0
