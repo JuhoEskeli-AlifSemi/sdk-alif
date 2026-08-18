@@ -31,7 +31,7 @@ manifest:
     - name: zephyr
       remote: juho
       repo-path: zephyr_alif
-      revision: fb85ff1f1c3609e7c31833b4e415fc4c1fb279a1
+      revision: 7e76dd17e6dadbb9da97c4efc11d5242c4bbb234
       import:
         # In addition to the zephyr repository itself,
         # Alif SDK fetches the needed projects
