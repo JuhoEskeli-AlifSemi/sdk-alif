@@ -14,13 +14,25 @@
 #include <dt-bindings/video/video-interfaces.h>
 
 /*
- * DTCM is 1536K (0x20000000..0x20180000), split at 0x200C0000:
+ * DTCM is 1536K (0x20000000..0x20180000). B1 layout for this sample:
  *
- *   [0x20000000 .. 0x200C0000)  768K  Zephyr core (.data/.bss/heap/stacks)
- *                                     + the USB MSC RAM disk (disk_buf_0)
+ *   [0x20000000 .. 0x2000A000)   40K  reserved_dtcm
+ *   [0x2000A000 .. 0x20020000)        Zephyr core (.data/.bss/heap/stacks;
+ *                                     only ~18K used)
+ *   [0x20020000 .. 0x200A0000)  512K  RAMDISK: USB MSC RAM disk (ram-region)
+ *   [0x200A0000 .. 0x200C0000)  128K  UNUSABLE on B1: this DTCM bank is not
+ *                                     backed - writes fault (see RAM disk note)
  *   [0x200C0000 .. 0x20180000)  768K  NON_SECURE0 (this node): USB DMA
  *                                     buffers + video capture pool
  *                                     (.alif_ns section, soc/.../alif_ns.ld)
+ *
+ * Do NOT shrink the &dtcm node reg to carve these out: local_to_global()
+ * (modules/hal/alif) maps DTCM local addresses to the global bus address every
+ * DMA master (CPI, USB, ...) uses, via DT_REG_SIZE(dtcm). A short reg puts
+ * NON_SECURE0 (0x200C0000) outside that range, so the CPI/USB DMA writes to an
+ * untranslated address and the bus returns DECERR (AXI BRESP=3). RAMDISK and
+ * NON_SECURE0 therefore overlap the full DTCM/zephyr,sram space but sit at fixed
+ * addresses the kernel leaves unused - as .alif_ns already does.
  *
  * The video pool (camera DMA target) and the USB buffers must live in
  * NON_SECURE0, so growing the capture buffer means growing this region.
@@ -48,17 +60,34 @@ zephyr_udc0: &usb {
 };
 
 /*
- * RAM Disk for USB MSC - holds the captured JPEG plus FAT overhead, so it
- * must be at least as large as the capture buffer (JPEG_CAPTURE_MAX_BYTES).
- * Lives in plain .bss below NON_SECURE0. 1440 * 512 = 720K = 672K capture
- * buffer + 48K FAT12/16 overhead.
+ * RAM Disk for USB MSC. The balletto SoC linker force-routes .bss.disk_buf_0
+ * into NON_SECURE0 (soc/.../alif_ns.ld), where it would collide with the 673K
+ * video pool. Give the disk its own DTCM region via ram-region instead: with a
+ * ram-region phandle the driver emits no disk_buf_0 symbol (ramdisk.c), so that
+ * KEEP line matches nothing and the shared SoC linker needs no edit.
+ *
+ * The region is 512K and ends at 0x200A0000: although &dtcm claims 1496K, the
+ * 128K DTCM bank at 0x200A0000..0x200C0000 is not backed on B1 (a write there
+ * faults with a precise bus error - confirmed by memset), so the disk must stop
+ * below it. 512K holds a ~470K JPEG + FAT; a larger frame (up to the 672K
+ * JPEG_CAPTURE_MAX_BYTES worst case) is dropped by the sample's short-write
+ * check rather than corrupting memory. The region overlaps zephyr,sram but the
+ * kernel (only ~18K of core .bss, no large heap) never reaches it - see the
+ * DECERR note above for why &dtcm stays full.
  */
 / {
+	ramdisk_mem: memory@20020000 {
+		compatible = "zephyr,memory-region";
+		reg = <0x20020000 DT_SIZE_K(512)>;
+		zephyr,memory-region = "RAMDISK";
+	};
+
 	ramdisk0 {
 		compatible = "zephyr,ram-disk";
+		ram-region = <&ramdisk_mem>;
 		disk-name = "RAM";
 		sector-size = <512>;
-		sector-count = <1440>;
+		sector-count = <1024>;
 	};
 };
 

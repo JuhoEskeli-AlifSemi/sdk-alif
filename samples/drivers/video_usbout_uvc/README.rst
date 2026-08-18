@@ -73,11 +73,11 @@ Building and Running
 .. code-block:: console
 
    # E1C SK
-   west build -b alif_e1c_sk/ae1c1f4051920hh/rtss_he alif/samples/drivers/video_usbout
+   west build -b alif_e1c_sk/ae1c1f4051920hh/rtss_he alif/samples/drivers/video_usbout_uvc
    west flash
 
    # B1 SK
-   west build -b alif_b1_sk/ab1c1f4m51820ph0/rtss_he alif/samples/drivers/video_usbout
+   west build -b alif_b1_sk/ab1c1f4m51820ph0/rtss_he alif/samples/drivers/video_usbout_uvc
    west flash
 
 After flashing, connect the USB cable to the host PC. The board enumerates as

@@ -21,6 +21,7 @@
 #include <ff.h>
 #include <soc_common.h>
 #include <se_service.h>
+#include <string.h>
 
 #ifdef CONFIG_VIDEO_USBOUT_INTERACTIVE_CONFIG
 #include "cam_config.h"
@@ -256,6 +257,15 @@ int main(void)
 
 #ifdef CONFIG_VIDEO_USBOUT_INTERACTIVE_CONFIG
 	cam_interactive_config();
+#endif
+
+#if DT_NODE_EXISTS(DT_NODELABEL(ramdisk_mem))
+	/* B1 puts the RAM disk in a NOLOAD ram-region, so the C runtime does not
+	 * zero it; DTCM has ECC and a host read of a never-written sector faults
+	 * on uninitialised ECC. Prime the whole region so every sector reads back
+	 * clean. (E1C keeps the disk in .bss, which is already zeroed.) */
+	memset((void *)DT_REG_ADDR(DT_NODELABEL(ramdisk_mem)), 0,
+	       DT_REG_SIZE(DT_NODELABEL(ramdisk_mem)));
 #endif
 
 	ret = fs_mount(&fs_mnt);

@@ -10,8 +10,8 @@ Overview
 ********
 
 This sample captures a single JPEG snapshot from an **OV5640** parallel
-camera on the Alif **E1C SK** board and exposes it as a file on a USB
-mass storage device. When the board is connected to a host PC the
+camera on the Alif **E1C SK** or **B1 SK** board and exposes it as a file
+on a USB mass storage device. When the board is connected to a host PC the
 captured image appears as ``capture.jpg`` on a removable drive, with no
 debugger needed to read the frame.
 
@@ -36,24 +36,29 @@ Pipeline behaviour:
 Requirements
 ************
 
-* Alif E1C SK board with a populated OV5640 module.
+* Alif E1C SK or B1 SK board with a populated OV5640 module.
 * USB cable from the board to a host PC.
 
-Supported Target
-****************
+Supported Targets
+*****************
 
 * ``alif_e1c_sk/ae1c1f4051920hh/rtss_he``
+* ``alif_b1_sk/ab1c1f4m51820ph0/rtss_he``
 
-This sample is intentionally not portable to other Alif boards or sensors —
-the run profile, pinctrl, ``cam_enbuf`` GPIO and JPEG snapshot path are
-all OV5640 + E1C SK specific.
+E1C SK and B1 SK are the same camera hardware, so the two board overlays are
+identical apart from the pinctrl binding. This sample is intentionally not
+portable beyond those boards — the run profile, pinctrl, ``cam_enbuf`` GPIO
+and JPEG snapshot path are all OV5640 + E1C/B1 SK specific.
 
 Building and Running
 ********************
 
 .. code-block:: console
 
+   # E1C SK
    west build -b alif_e1c_sk/ae1c1f4051920hh/rtss_he alif/samples/drivers/video_usbout
+   # B1 SK
+   west build -b alif_b1_sk/ab1c1f4m51820ph0/rtss_he alif/samples/drivers/video_usbout
    west flash
 
 After flashing, connect the USB cable to the host PC. A removable drive
