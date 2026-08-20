@@ -1,0 +1,4 @@
+name: lpcmp-wakeup
+append:
+  EXTRA_DTC_OVERLAY_FILE: lpcmp.overlay
+  EXTRA_CONF_FILE: lpcmp.conf

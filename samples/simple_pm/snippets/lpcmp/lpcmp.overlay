@@ -1,0 +1,49 @@
+/* Copyright (C) Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code is permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+//#define EXT_VREF 1
+
+&pinctrl_lpcmp {
+	group0 {
+		pinmux = <PIN_P2_4__ANA_S12>
+		        /*<PIN_P2_4__ANA_S12>,
+			 <PIN_P2_5__ANA_S13>,
+			 <PIN_P2_6__ANA_S14>,
+			 <PIN_P2_7__ANA_S15>*/;
+		read-enable = <0x1>;
+	};
+#if EXT_VREF
+	group1 {
+                pinmux = <PIN_P2_0__ANA_S8>;
+                read-enable = <0x1>;
+        };
+#endif
+};
+
+&lpcmp {
+        pinctrl-0	 = < &pinctrl_lpcmp >;
+        driver_instance	 = "CMP_INSTANCE_LP";
+        /* -------------------- */
+	positive_input	 = "CMP_POS_IN0"; /* P2_4 */
+	//positive_input	 = "CMP_POS_IN1"; /* P2_5 */
+	//positive_input	 = "CMP_POS_IN2"; /* P2_6 */
+	//positive_input	 = "CMP_POS_IN3"; /* P2_7 */
+	/* -------------------- */
+#if EXT_VREF
+	negative_input	 = "CMP_NEG_IN1"; /* VREF1, P2_0 */
+#else
+        negative_input	 = "CMP_NEG_IN0"; /* Internal VREF1 */
+#endif
+	/* -------------------- */
+	hysteresis_level = "42mV";
+	interrupts	 = <56 0>;
+        status = "okay";
+};
