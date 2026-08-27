@@ -95,16 +95,30 @@ LOG_MODULE_REGISTER(pm_lpcmp, LOG_LEVEL_INF);
 #define LPCMP_BACKOFF_MS 2000
 
 /*
- * MRAM base address - used to determine boot location.
+ * MRAM base address - used only to name the boot location in the banner.
  * TCM boot: VTOR = 0x0, MRAM boot: VTOR >= 0x80000000.
- * Only a TCM boot retains code and context across suspend-to-RAM; an MRAM
- * boot uses SOFT_OFF and resets on wakeup.
  */
 #define MRAM_BASE_ADDRESS 0x80000000
 #define IS_BOOTING_FROM_MRAM() (SCB->VTOR >= MRAM_BASE_ADDRESS)
 
-#define S2RAM_SUPPORTED    (!IS_BOOTING_FROM_MRAM())
-#define SOFT_OFF_SUPPORTED IS_BOOTING_FROM_MRAM()
+/*
+ * Whether suspend-to-RAM is usable is not a question of the boot source.
+ * Resume goes through the reset vector that the SE is told to restart the
+ * core at, so the only real precondition is that the shared aipm-off
+ * vtor-address matches where this image actually booted from.
+ *
+ * Everything else already lines up in both boot modes: .data/.bss/.noinit
+ * and the stacks live in DTCM (SRAM5), which the off profiles retain, the
+ * text is either in retained ITCM or in non-volatile MRAM, and
+ * arch_pm_s2ram_resume() runs from the reset vector before .data/.bss are
+ * initialised, so the resume path itself is boot-source agnostic.
+ *
+ * pm-system-off-he pins vtor-address to 0x0 for a TCM boot. Stack the
+ * pm-mram-retain snippet on top of it to restore 0x80000000 and get the same
+ * retention with the code left in MRAM.
+ */
+#define AIPM_OFF_VTOR   DT_PROP(DT_NODELABEL(aipm_off), vtor_address)
+#define S2RAM_SUPPORTED (SCB->VTOR == AIPM_OFF_VTOR)
 
 BUILD_ASSERT(S2RAM_STOP_SLEEP_MS > S2RAM_STANDBY_SLEEP_MS,
 	"STOP sleep duration should be greater than STANDBY sleep duration");
@@ -400,6 +414,16 @@ int main(void)
 	LOG_INF("Deep state: %s",
 		S2RAM_SUPPORTED ? "PM_STATE_SUSPEND_TO_RAM (STANDBY, then STOP)"
 				: "PM_STATE_SOFT_OFF (resets on wakeup)");
+
+	if (!S2RAM_SUPPORTED) {
+		LOG_WRN("aipm-off vtor-address is 0x%08x but this image booted at "
+			"0x%08x, so suspend-to-RAM would resume at the wrong entry "
+			"point", (unsigned int)AIPM_OFF_VTOR,
+			(unsigned int)SCB->VTOR);
+		if (IS_BOOTING_FROM_MRAM()) {
+			LOG_WRN("Add -S pm-mram-retain for retention on an MRAM boot");
+		}
+	}
 	LOG_INF("Wakeup sources: LPCMP (primary) and LPRTC (timeout/backup)");
 	LOG_INF("Drive the LPCMP positive terminal (P2_4) across ~0.8 V to wake");
 

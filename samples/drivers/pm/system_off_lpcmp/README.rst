@@ -25,6 +25,9 @@ Which deep state is demonstrated follows the boot location, exactly as in
    wakeup takes the full 26 s budget, an LPCMP wakeup happens as soon as the
    comparator input crosses the reference.
 
+   Add ``-S pm-mram-retain`` to get suspend-to-RAM retention here too - see
+   `Retention on an MRAM boot`_.
+
 **TCM boot** (VTOR = 0x0)
    ``PM_STATE_SUSPEND_TO_RAM``, first the STANDBY substate (20 s budget) then
    the STOP substate (22 s budget). Context is retained, so the sample blocks
@@ -33,6 +36,55 @@ Which deep state is demonstrated follows the boot location, exactly as in
 
       woken by LPCMP after 4213 ms
       woken by LPRTC timeout after 20009 ms
+
+The choice is not actually made on the boot source. Suspend-to-RAM resumes
+through the reset vector that the SE is told to restart the core at, so the
+real precondition is that the ``aipm-off`` ``vtor-address`` matches where the
+image booted from. The sample compares the two and says so when they disagree.
+
+.. _Retention on an MRAM boot:
+
+Retention on an MRAM boot
+*************************
+
+Suspend-to-RAM works perfectly well with the code left in MRAM. The stock
+samples fall back to SOFT_OFF there because ``pm-system-off-he`` pins the
+shared ``aipm-off`` ``vtor-address`` to ``0x0`` - the TCM resume entry point -
+so on an MRAM boot the SE would restart the core at an address holding
+nothing. That is the only thing in the way:
+
+* ``.data``, ``.bss``, ``.noinit`` and the stacks live in DTCM on an MRAM boot
+  too (``RAM`` origin ``0x2000A000``, which is SRAM5), and the off profiles
+  already retain ``SRAM5_1..5``.
+* The text stays in MRAM, which is non-volatile, and ``ALIF_MRAM_MASK`` is in
+  ``memory-blocks`` either way.
+* The resume marker and saved CPU context are ``__noinit``, and
+  ``arch_pm_s2ram_resume()`` is called from the reset vector *before*
+  ``.data``/``.bss`` are initialised, so the resume path does not care where
+  the image booted from.
+
+The ``pm-mram-retain`` add-on snippet restores the SoC's default
+``vtor-address`` of ``0x80000000``. Stack it after the main snippet - snippet
+overlays are applied in the order the ``-S`` flags are given, so it must come
+second:
+
+.. code-block:: console
+
+   west build -p always -b alif_b1_dk/ab1c1f4m51820ph0/rtss_he \
+       alif/samples/drivers/pm/system_off_lpcmp \
+       -S pm-system-off-lpcmp-he -S pm-mram-retain
+
+The sample then reports ``PM_STATE_SUSPEND_TO_RAM`` on an MRAM boot and names
+the wake cause on each resume, exactly as it does for a TCM boot.
+
+.. note::
+   This variant builds and the reasoning above checks out against the linker
+   layout and the resume path, but it has not been run on hardware. The
+   SOFT_OFF path on an MRAM boot is the one that has been tested.
+
+   ``memory-blocks`` still retains ``SRAM4_1..4`` (ITCM), which an MRAM boot
+   does not need since the text is not there. Dropping those blocks in your
+   own overlay will cut retention current further.
 
 How the wakeup source is configured
 ***********************************
