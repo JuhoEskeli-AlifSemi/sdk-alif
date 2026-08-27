@@ -1,0 +1,20 @@
+# Copyright (C) 2026 Alif Semiconductor - All Rights Reserved.
+# Use, distribution and modification of this code is permitted under the
+# terms stated in the Alif Semiconductor Software License Agreement
+#
+# You should have received a copy of the Alif Semiconductor Software
+# License Agreement with this file. If not, please write to:
+# contact@alifsemi.com, or visit: https://alifsemi.com/license
+
+
+mainmenu "Alif PM LPCMP Wakeup Demo"
+
+config APP_LPCMP_WAKEUP_ROUNDS
+	int "Number of sleep/wake rounds to run"
+	default 0
+	help
+	  Number of STANDBY + STOP sleep rounds to run before parking in an
+	  idle loop. 0 means run forever, which is what you usually want on the
+	  bench so the comparator input can be poked repeatedly.
+
+source "Kconfig.zephyr"
