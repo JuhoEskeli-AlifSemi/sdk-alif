@@ -1,0 +1,18 @@
+/* Copyright (C) 2026 Alif Semiconductor - All Rights Reserved.
+ * Use, distribution and modification of this code are permitted under the
+ * terms stated in the Alif Semiconductor Software License Agreement.
+ *
+ * You should have received a copy of the Alif Semiconductor Software
+ * License Agreement with this file. If not, please write to:
+ * contact@alifsemi.com, or visit: https://alifsemi.com/license
+ *
+ * E8 AppKit (RTSS-HE) UVC pipeline:
+ *   OV5675 (MIPI CSI-2, RAW10) -> ISP (NV12 1024x768) -> Hantro JPEG -> UVC.
+ *
+ * The camera wiring and the pipeline are the same from either core, so this
+ * reuses the RTSS-HP board overlay as is. The default NON_SECURE0 region
+ * (0x20018000, 96K) also fits the HE's 256K DTCM, and the video pool stays in
+ * SRAM0 as on the HP.
+ */
+
+#include "alif_e8_ak_ae822fa0e5597xx0_rtss_hp.overlay"

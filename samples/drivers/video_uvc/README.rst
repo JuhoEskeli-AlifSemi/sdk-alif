@@ -24,9 +24,9 @@ devicetree of the target board:
   encoder**, streamed as **MJPEG** (ARX3A0 at 560x560, MT9M114 at 1280x720,
   OV5675 at 1024x768). There is no default sensor; it is chosen at build time
   by the devicetree overlay (see below).
-* **E8 AppKit (RTSS-HP)** — the same ISP + JPEG pipeline with an **OV5675**
-  MIPI CSI-2 camera (the only sensor supported on the AppKit), streamed as
-  **MJPEG 1024x768**.
+* **E8 AppKit (RTSS-HP or RTSS-HE)** — the same ISP + JPEG pipeline with an
+  **OV5675** MIPI CSI-2 camera (the only sensor supported on the AppKit),
+  streamed as **MJPEG 1024x768**.
 
 The flow is:
 
@@ -103,6 +103,7 @@ Supported Targets
 * ``alif_e8_dk/ae822fa0e5597xx0/rtss_hp`` (ARX3A0, MT9M114 or OV5675 -> ISP ->
   JPEG, MJPEG)
 * ``alif_e8_ak/ae822fa0e5597xx0/rtss_hp`` (OV5675 -> ISP -> JPEG, MJPEG)
+* ``alif_e8_ak/ae822fa0e5597xx0/rtss_he`` (OV5675 -> ISP -> JPEG, MJPEG)
 
 Building and Running
 ********************
@@ -192,11 +193,23 @@ power on gpio7.5), and the board ``.conf`` of the same name carries both the
 ISP / JPEG config and the OV5675 buffer pool. The stream is the same MJPEG
 1024x768 as the E8 DK OV5675 build.
 
-OV5675 (ISP -> JPEG, MJPEG):
+The pipeline runs on either core. The RTSS-HE board overlay reuses the RTSS-HP
+one as is, and its ``.conf`` is a copy of the RTSS-HP one; the only difference
+is the CPU clock (160 MHz on the HE, 400 MHz on the HP).
+
+RTSS-HP (OV5675 -> ISP -> JPEG, MJPEG):
 
 .. zephyr-app-commands::
    :zephyr-app: samples/drivers/video_uvc
    :board: alif_e8_ak/ae822fa0e5597xx0/rtss_hp
+   :goals: build flash
+   :compact:
+
+RTSS-HE (OV5675 -> ISP -> JPEG, MJPEG):
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/drivers/video_uvc
+   :board: alif_e8_ak/ae822fa0e5597xx0/rtss_he
    :goals: build flash
    :compact:
 
