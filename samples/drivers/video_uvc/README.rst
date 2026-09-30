@@ -24,6 +24,9 @@ devicetree of the target board:
   encoder**, streamed as **MJPEG** (ARX3A0 at 560x560, MT9M114 at 1280x720,
   OV5675 at 1024x768). There is no default sensor; it is chosen at build time
   by the devicetree overlay (see below).
+* **E8 AppKit (RTSS-HP)** — the same ISP + JPEG pipeline with an **OV5675**
+  MIPI CSI-2 camera (the only sensor supported on the AppKit), streamed as
+  **MJPEG 1024x768**.
 
 The flow is:
 
@@ -87,7 +90,8 @@ Requirements
 * One of:
 
   * Alif E1C SK or B1 SK board with a populated OV5640 module, or
-  * Alif E8 DK board with an ARX3A0, MT9M114 or OV5675 camera module.
+  * Alif E8 DK board with an ARX3A0, MT9M114 or OV5675 camera module, or
+  * Alif E8 AppKit board with an OV5675 camera module.
 
 * USB cable from the board to a host PC.
 
@@ -98,6 +102,7 @@ Supported Targets
 * ``alif_b1_sk/ab1c1f4m51820ph0/rtss_he`` (OV5640, RGB565)
 * ``alif_e8_dk/ae822fa0e5597xx0/rtss_hp`` (ARX3A0, MT9M114 or OV5675 -> ISP ->
   JPEG, MJPEG)
+* ``alif_e8_ak/ae822fa0e5597xx0/rtss_hp`` (OV5675 -> ISP -> JPEG, MJPEG)
 
 Building and Running
 ********************
@@ -128,7 +133,8 @@ E8 DK
 
 Every E8 DK build automatically applies the common board overlay
 ``alif_e8_dk_ae822fa0e5597xx0_rtss_hp.overlay`` (USB, ISP/CPI graph, CSI
-receiver, i2c-mux, JPEG encoder, UVC). It wires **no default sensor**: the
+receiver, i2c-mux, JPEG encoder, UVC; everything but the i2c-mux is shared with
+the E8 AppKit in ``e8_isp_jpeg_uvc.dtsi``). It wires **no default sensor**: the
 ARX3A0, MT9M114 and OV5675 are peers, so every E8 build adds one sensor overlay
 with ``EXTRA_DTC_OVERLAY_FILE`` (which merges on top of the auto-applied board
 overlay) plus that sensor's extra Kconfig fragment with ``EXTRA_CONF_FILE``.
@@ -176,6 +182,24 @@ no edge padding. Unlike the MT9M114 the OV5675 sits at I2C address ``0x10`` and
 is powered from plain ``power-gpios``, so it needs no GT911 reset-hold hog and
 no fixed-regulator Kconfig.
 
+E8 AppKit
+=========
+
+The AppKit supports only the OV5675, so it needs no extra arguments: the board
+overlay ``alif_e8_ak_ae822fa0e5597xx0_rtss_hp.overlay`` wires the OV5675
+directly on ``i2c1`` (the AppKit has no camera i2c-mux; reset on gpio9.1,
+power on gpio7.5), and the board ``.conf`` of the same name carries both the
+ISP / JPEG config and the OV5675 buffer pool. The stream is the same MJPEG
+1024x768 as the E8 DK OV5675 build.
+
+OV5675 (ISP -> JPEG, MJPEG):
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/drivers/video_uvc
+   :board: alif_e8_ak/ae822fa0e5597xx0/rtss_hp
+   :goals: build flash
+   :compact:
+
 Viewing the stream
 ==================
 
@@ -196,7 +220,7 @@ a UVC webcam. To view the stream on Linux:
    # E8 (MT9M114): MJPEG 1280x720
    ffplay -f v4l2 -input_format mjpeg -video_size 1280x720 /dev/videoN
 
-   # E8 (OV5675): MJPEG 1024x768
+   # E8 DK / AppKit (OV5675): MJPEG 1024x768
    ffplay -f v4l2 -input_format mjpeg -video_size 1024x768 /dev/videoN
 
    # grab a single still (E8 ARX3A0 MJPEG)

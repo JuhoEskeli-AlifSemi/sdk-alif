@@ -8,8 +8,9 @@
  * the target's devicetree. This header hides the resulting preprocessor
  * selection so main.c can stay focused on the capture/stream logic:
  *
- *   - MJPEG (E8 DK): a CSI-2 sensor -> ISP (NV12) -> Hantro JPEG encoder. The
- *     sensor and its resolutions are picked from the enabled sensor node.
+ *   - MJPEG (E8 DK / AppKit): a CSI-2 sensor -> ISP (NV12) -> Hantro JPEG
+ *     encoder. The sensor and its resolutions are picked from the compatible
+ *     of the enabled sensor node.
  *   - RGB565 (E1C / B1 SK): an OV5640 parallel camera off the LP-CAM, streamed
  *     uncompressed.
  *
@@ -39,10 +40,10 @@
  * the ARX3A0 its native 560x560, and the OV5675 its full-FOV 1296x972 mode
  * downscaled by the ISP to 1024x768 (4:3, 16-aligned).
  */
-#if DT_NODE_EXISTS(DT_NODELABEL(mt9m114_selfie))
+#if DT_HAS_COMPAT_STATUS_OKAY(aptina_mt9m114)
 #define UVC_FRAME_WIDTH  1280U
 #define UVC_FRAME_HEIGHT 720U
-#elif DT_NODE_EXISTS(DT_NODELABEL(ov5675_selfie))
+#elif DT_HAS_COMPAT_STATUS_OKAY(ovti_ov5675)
 #define UVC_FRAME_WIDTH  1024U
 #define UVC_FRAME_HEIGHT 768U
 #else /* ARX3A0 */
@@ -81,10 +82,10 @@ BUILD_ASSERT(JPEG_OUTPUT_MAX_BYTES <= UVC_FRAME_WIDTH * UVC_FRAME_HEIGHT,
  * set before stream_start, or it fails with -EINVAL.
  */
 #define ISP_INPUT_FORMAT VIDEO_PIX_FMT_Y10P
-#if DT_NODE_EXISTS(DT_NODELABEL(mt9m114_selfie))
+#if DT_HAS_COMPAT_STATUS_OKAY(aptina_mt9m114)
 #define ISP_INPUT_WIDTH  1288U
 #define ISP_INPUT_HEIGHT 728U
-#elif DT_NODE_EXISTS(DT_NODELABEL(ov5675_selfie))
+#elif DT_HAS_COMPAT_STATUS_OKAY(ovti_ov5675)
 #define ISP_INPUT_WIDTH  1296U
 #define ISP_INPUT_HEIGHT 972U
 #else /* ARX3A0 */

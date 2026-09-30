@@ -5,8 +5,8 @@
  * Camera capture exposed as a USB Video Class (UVC) webcam. The capture
  * pipeline is chosen at build time from the devicetree (see pipeline.h):
  *
- *   - MJPEG (E8 DK):  <sensor> -> CSI -> ISP (NV12) -> Hantro JPEG encoder,
- *     streamed as MJPEG over the UVC bulk endpoint.
+ *   - MJPEG (E8 DK / AppKit): <sensor> -> CSI -> ISP (NV12) -> Hantro JPEG
+ *     encoder, streamed as MJPEG over the UVC bulk endpoint.
  *   - RGB565 (E1C / B1 SK): OV5640 parallel RGB565 480x272 off the LP-CAM,
  *     streamed uncompressed.
  *
