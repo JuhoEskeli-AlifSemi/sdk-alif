@@ -183,6 +183,15 @@ no edge padding. Unlike the MT9M114 the OV5675 sits at I2C address ``0x10`` and
 is powered from plain ``power-gpios``, so it needs no GT911 reset-hold hog and
 no fixed-regulator Kconfig.
 
+The OV5675 builds (E8 DK and E8 AppKit) also turn on the ISP's colour
+correction, using the OV5675 calibration in the ISP library and the same module
+set as the MLEK OV5675 ISP pipeline: black-level subtraction, a fixed
+colour-correction matrix (which also carries the white balance), output gamma
+and auto exposure (the ISP sets the sensor's exposure and gain every few
+frames). Without it the raw Bayer data comes out green. The ISP's auto white
+balance stays off, because its calibration is a generic placeholder. The ARX3A0
+and MT9M114 builds leave these modules off.
+
 E8 AppKit
 =========
 
