@@ -1,0 +1,39 @@
+# Copyright (c) 2026 Alif Semiconductor
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "USB Host UVC Capture Sample"
+
+config SAMPLE_UVC_FORMAT_INDEX
+	int "Format to stream (bFormatIndex)"
+	range 0 255
+	default 0
+	help
+	  bFormatIndex of the video format to request from the device. 0
+	  selects the first format the device lists.
+
+config SAMPLE_UVC_FRAME_INDEX
+	int "Frame size to stream (bFrameIndex)"
+	range 0 255
+	default 0
+	help
+	  bFrameIndex of the frame size to request within the selected format.
+	  0 selects the format's default frame (bDefaultFrameIndex).
+
+config SAMPLE_UVC_FRAME_BUFFER_SIZE
+	int "Frame reassembly buffer size in bytes"
+	default 614400
+	help
+	  Size of the buffer each frame is reassembled into, in SRAM0. The
+	  device's dwMaxVideoFrameSize for the negotiated format must fit. The
+	  default holds a 640x480 frame at 16 bits per pixel.
+
+config SAMPLE_UVC_TRACE_XFERS
+	int "Log the first N bulk transfers"
+	range 0 64
+	default 0
+	help
+	  Record the length and first bytes of the first N bulk IN transfers
+	  after the first stream starts and log them once N have arrived, to
+	  debug payload framing. 0 disables the trace.
+
+source "Kconfig.zephyr"
