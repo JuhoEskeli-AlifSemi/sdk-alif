@@ -15,6 +15,8 @@
  *   4. Negotiate a format and frame size with Probe/Commit
  *   5. Keep several bulk IN transfers queued, reassemble frames from the UVC
  *      payloads, validate each frame and log statistics once per second
+ *   6. With display.overlay and display.conf, show each valid frame on the
+ *      DK display (src/display.c)
  *
  * Build:
  *   west build -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp \
@@ -32,6 +34,7 @@
 #include <zephyr/drivers/usb/uhc_dwc3.h>
 #include <zephyr/sys/byteorder.h>
 
+#include "display.h"
 #include "uvc.h"
 
 #include <zephyr/logging/log.h>
@@ -192,6 +195,10 @@ static void frame_done(const uint8_t *frame, size_t len, bool err)
 		LOG_WRN("Bad frame #%u: %zu bytes (expected %zu)%s", stats.frames,
 			len, check.expected_size,
 			err ? " (error flagged in stream)" : "");
+	}
+
+	if (!bad) {
+		uvc_display_frame(frame, len);
 	}
 
 	stats.frames++;
@@ -403,6 +410,18 @@ static int setup_stream(void)
 		return ret;
 	}
 
+	/* Go with the format and frame the device settled on */
+	if (probe.bFormatIndex != fmt->index ||
+	    probe.bFrameIndex != frame->index) {
+		fmt = uvc_find_format(&uvc, probe.bFormatIndex);
+		frame = uvc_find_frame(&uvc, probe.bFormatIndex,
+				       probe.bFrameIndex);
+		if (fmt == NULL || frame == NULL) {
+			LOG_ERR("Device committed an unknown format/frame");
+			return -EINVAL;
+		}
+	}
+
 	max_payload = sys_le32_to_cpu(probe.dwMaxPayloadTransferSize);
 	max_frame = sys_le32_to_cpu(probe.dwMaxVideoFrameSize);
 
@@ -428,6 +447,8 @@ static int setup_stream(void)
 	check.mjpeg = (fmt->subtype == UVC_VS_FORMAT_MJPEG);
 	check.expected_size = (fmt->subtype == UVC_VS_FORMAT_UNCOMPRESSED) ?
 		(size_t)frame->width * frame->height * fmt->bpp / 8 : 0;
+
+	uvc_display_set_format(fmt, frame->width, frame->height);
 
 	uvc_stream_init(&stream, max_payload, frame_buf, sizeof(frame_buf),
 			frame_done);
@@ -501,6 +522,11 @@ int main(void)
 	if (ret) {
 		LOG_ERR("Failed to enable UHC: %d", ret);
 		return ret;
+	}
+
+	/* Without a working display the sample still captures and checks */
+	if (uvc_display_init() != 0) {
+		LOG_WRN("Continuing without the display");
 	}
 
 	LOG_INF("Waiting for a USB video device...");

@@ -71,7 +71,7 @@ Each reassembled frame is counted as *bad* when:
 Requirements
 ************
 
-* Alif Ensemble E8 DK or E7 DK
+* Alif Ensemble E8 DK
 * A UVC device that streams over bulk, for example an Alif E1C SK running the
   ``samples/drivers/video_uvc`` sample (RGB565 480x272), connected to the DK
   USB host port
@@ -93,6 +93,33 @@ driver:
      -- -DDTC_OVERLAY_FILE=boards/alif_usb_host.overlay
 
 Flash the image, open the serial console and connect the UVC device.
+
+Showing the video on the display
+================================
+
+Add ``display.overlay`` and ``display.conf`` to show the captured frames on
+the DK's MW405 480x800 MIPI DSI panel:
+
+.. code-block:: console
+
+   west build -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp \
+     alif/samples/drivers/usb/usb_host_uvc \
+     -- -DDTC_OVERLAY_FILE=boards/alif_usb_host.overlay \
+     -DEXTRA_DTC_OVERLAY_FILE=display.overlay -DEXTRA_CONF_FILE=display.conf
+
+The display is brought up as follows:
+the overlay sets the CDC200 panel timing for one RGB565 layer and adds the
+CDC200, MIPI DSI and D-PHY blocks to the run profile, and at startup the
+sample switches the DSI host to video mode, turns the panel on and enables
+the CDC200. On the E4/E6/E8 DK the shared MIPI lanes are switched to the
+display (``cam-disp-mux-gpios``) before the panel driver initialises.
+
+Every frame that passes validation is drawn centred on the panel with
+:c:func:`display_write`. RGB565 (``RGBP``) frames are copied as they are and
+YUY2 frames are converted to RGB565; frames larger than the panel are shrunk
+by an integer factor. Other formats, such as MJPEG, are captured and checked
+but not shown. The frames are written to the live framebuffer, so some tearing
+can be visible.
 
 Configuration
 =============

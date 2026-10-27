@@ -6,6 +6,7 @@ find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
 project(usb_host_uvc)
 
 target_sources(app PRIVATE src/main.c src/uvc.c)
+target_sources_ifdef(CONFIG_DISPLAY app PRIVATE src/display.c)
 
 # Place USB host DMA buffers in SRAM0
 zephyr_linker_sources(DATA_SECTIONS ${CMAKE_CURRENT_SOURCE_DIR}/uhc_dma.ld)

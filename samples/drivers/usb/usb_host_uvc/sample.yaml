@@ -5,7 +5,7 @@ sample:
     over a bulk endpoint, negotiates a format with Probe/Commit, reassembles
     frames from the UVC payloads, validates them and logs frame rate and
     throughput. Tested on the E8 DK with an E1C SK running the video_uvc
-    sample as the camera.
+    sample as the camera. Optionally shows the video on the DK display.
 tests:
   sample.drivers.usb.host_uvc:
     extra_args:
@@ -21,4 +21,22 @@ tests:
       - usb
       - host
       - video
+    harness: keyboard
+  sample.drivers.usb.host_uvc.display:
+    extra_args:
+      - DTC_OVERLAY_FILE=boards/alif_usb_host.overlay
+      - EXTRA_DTC_OVERLAY_FILE=display.overlay
+      - EXTRA_CONF_FILE=display.conf
+    integration_platforms:
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_hp
+    platform_allow:
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_hp
+      - alif_e8_dk/ae822fa0e5597xx0/rtss_he
+      - alif_e7_dk/ae722f80f55d5xx/rtss_hp
+      - alif_e7_dk/ae722f80f55d5xx/rtss_he
+    tags:
+      - usb
+      - host
+      - video
+      - display
     harness: keyboard
