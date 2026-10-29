@@ -70,7 +70,7 @@ static uint8_t chunks[NUM_CHUNKS][CHUNK_SIZE] __aligned(CHUNK_SIZE)
 static uint8_t frame_buf[CONFIG_SAMPLE_UVC_FRAME_BUFFER_SIZE] __aligned(64)
 	SRAM0_SECTION;
 
-static uint8_t cfg_desc[2048];
+static uint8_t cfg_desc[UHC_DWC3_CTRL_MAX_LEN];
 static struct uvc_device uvc;
 static struct uvc_stream stream;
 

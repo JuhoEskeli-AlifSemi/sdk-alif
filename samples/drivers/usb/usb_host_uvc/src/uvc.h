@@ -20,7 +20,7 @@
 
 /* Limits on what the descriptor parser records */
 #define UVC_MAX_FORMATS		8
-#define UVC_MAX_FRAMES		32
+#define UVC_MAX_FRAMES		64
 
 /* Payload header bmHeaderInfo bits (UVC 1.5, 2.4.3.3) */
 #define UVC_HDR_FID		BIT(0)
