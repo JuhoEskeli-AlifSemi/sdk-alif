@@ -354,11 +354,57 @@ static void list_formats(void)
 	}
 }
 
-/* Pick the format and frame selected in Kconfig (0 = default) */
+/*
+ * The largest frame the display shows without shrinking it, of the format
+ * selected in Kconfig or, with 0, of any format the display can show.
+ */
+static const struct uvc_frame *select_display_frame(
+	const struct uvc_format **fmt_out)
+{
+	const struct uvc_frame *best = NULL;
+	uint32_t best_area = 0;
+
+	for (int i = 0; i < uvc.num_frames; i++) {
+		const struct uvc_frame *frm = &uvc.frames[i];
+		const struct uvc_format *fmt =
+			uvc_find_format(&uvc, frm->format_index);
+		uint32_t area = (uint32_t)frm->width * frm->height;
+
+		if (fmt == NULL ||
+		    (CONFIG_SAMPLE_UVC_FORMAT_INDEX != 0 &&
+		     fmt->index != CONFIG_SAMPLE_UVC_FORMAT_INDEX) ||
+		    !uvc_display_fits(fmt, frm->width, frm->height) ||
+		    area * fmt->bpp / 8 > CONFIG_SAMPLE_UVC_FRAME_BUFFER_SIZE ||
+		    area <= best_area) {
+			continue;
+		}
+
+		best = frm;
+		best_area = area;
+		*fmt_out = fmt;
+	}
+
+	return best;
+}
+
+/*
+ * Pick the format and frame selected in Kconfig (0 = default). With the
+ * display and no frame selected, the frame that fills the display best.
+ */
 static const struct uvc_frame *select_frame(const struct uvc_format **fmt_out)
 {
 	const struct uvc_format *fmt;
+	const struct uvc_frame *frame;
 	uint8_t frame_index;
+
+	if (CONFIG_SAMPLE_UVC_FRAME_INDEX == 0) {
+		frame = select_display_frame(fmt_out);
+		if (frame != NULL) {
+			LOG_INF("Format %u frame %u fills the display best",
+				frame->format_index, frame->index);
+			return frame;
+		}
+	}
 
 	if (CONFIG_SAMPLE_UVC_FORMAT_INDEX == 0) {
 		fmt = &uvc.formats[0];

@@ -9,7 +9,8 @@ config SAMPLE_UVC_FORMAT_INDEX
 	default 0
 	help
 	  bFormatIndex of the video format to request from the device. 0
-	  selects the first format the device lists.
+	  selects the first format the device lists or, with the display, any
+	  format the display can show.
 
 config SAMPLE_UVC_FRAME_INDEX
 	int "Frame size to stream (bFrameIndex)"
@@ -17,7 +18,18 @@ config SAMPLE_UVC_FRAME_INDEX
 	default 0
 	help
 	  bFrameIndex of the frame size to request within the selected format.
-	  0 selects the format's default frame (bDefaultFrameIndex).
+	  0 selects the format's default frame (bDefaultFrameIndex) or, with
+	  the display, the largest frame the display shows without shrinking
+	  it, turned by 90 degrees if need be.
+
+config SAMPLE_UVC_DISPLAY_ROTATE_CCW
+	bool "Turn frames counter-clockwise on the display"
+	depends on DISPLAY
+	help
+	  Frames that fill more of the display turned by 90 degrees, such as
+	  landscape frames on the DK's portrait panel, are turned clockwise,
+	  which puts the top of the picture on the right of the panel. Select
+	  this to turn them counter-clockwise instead.
 
 config SAMPLE_UVC_FRAME_BUFFER_SIZE
 	int "Frame reassembly buffer size in bytes"

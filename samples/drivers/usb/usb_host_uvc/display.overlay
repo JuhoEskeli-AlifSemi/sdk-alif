@@ -3,14 +3,26 @@
  * SPDX-License-Identifier: Apache-2.0
  *
  * Show the captured video on the Ensemble DK display: the MW405 480x800
- * MIPI DSI panel driven by the CDC200 controller, one RGB565 layer.
+ * MIPI DSI panel driven by the CDC200 controller, one RGB565 layer. The
+ * D/AVE2D GPU turns frames for the portrait panel.
  * Use together with display.conf (see README.rst).
  */
 
 #include <dt-bindings/misc/alif_aipm_common.h>
 
 / {
+	aliases {
+		d2-inst = &gpu2d;
+	};
+
 	soc {
+		gpu2d: dave2d@49040000 {
+			compatible = "tes,dave2d";
+			reg = <0x49040000 0x1000>;
+			interrupts = <332 2>;
+			clocks = <&clockctrl ALIF_GPU_CLK>;
+		};
+
 		cdc200: cdc200@49031000 {
 			width = <480>;
 			height = <800>;
@@ -49,10 +61,16 @@
 	};
 };
 
+/* The D/AVE2D heap and the frame it turns are kept in SRAM1 */
+&sram1 {
+	status = "okay";
+};
+
 /* Keep the USB PHY powered and add the display blocks */
 &aipm_run_default {
 	ip-clock-gating = <(ALIF_IP_CLK_GATE_CDC200_MASK |
-			    ALIF_IP_CLK_GATE_MIPI_DSI_MASK)>;
+			    ALIF_IP_CLK_GATE_MIPI_DSI_MASK |
+			    ALIF_IP_CLK_GATE_GPU_MASK)>;
 	phy-pwr-gating = <(ALIF_PHY_GATE_USB_MASK | ALIF_PHY_GATE_LDO_MASK |
 			   ALIF_PHY_GATE_MIPI_TX_DPHY_MASK |
 			   ALIF_PHY_GATE_MIPI_RX_DPHY_MASK |

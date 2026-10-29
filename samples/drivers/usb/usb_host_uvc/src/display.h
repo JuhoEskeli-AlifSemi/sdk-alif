@@ -19,6 +19,13 @@
 int uvc_display_init(void);
 
 /*
+ * Whether frames of this format and size can be shown without shrinking
+ * them, turned by 90 degrees if need be.
+ */
+bool uvc_display_fits(const struct uvc_format *fmt, uint16_t width,
+		      uint16_t height);
+
+/*
  * Select the format and size of the frames to show next. Returns false if
  * the format cannot be shown, in which case frames are ignored.
  */
@@ -33,6 +40,12 @@ void uvc_display_frame(const uint8_t *frame, size_t len);
 static inline int uvc_display_init(void)
 {
 	return 0;
+}
+
+static inline bool uvc_display_fits(const struct uvc_format *fmt,
+				    uint16_t width, uint16_t height)
+{
+	return false;
 }
 
 static inline bool uvc_display_set_format(const struct uvc_format *fmt,
