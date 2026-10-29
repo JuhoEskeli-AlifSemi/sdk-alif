@@ -6,17 +6,20 @@
  *
  * Brings up the DWC3 controller in host mode and captures video from a USB
  * Video Class (UVC) device that streams over a bulk endpoint, such as an
- * Alif board running the video_uvc sample:
+ * Alif board running the video_uvc sample, or over an isochronous one, such
+ * as a webcam:
  *
  *   1. Wait for a device to be connected and enumerate it
  *   2. Parse the configuration descriptor for the VideoStreaming interface,
- *      its formats and frame sizes
- *   3. SET_CONFIGURATION and configure the bulk IN streaming endpoint
+ *      its formats and frame sizes, and its alternate settings
+ *   3. SET_CONFIGURATION and, for bulk, configure the bulk IN endpoint
  *   4. Negotiate a format and frame size with Probe/Commit
- *   5. Keep several bulk IN transfers queued, reassemble frames from the UVC
- *      payloads, validate each frame and log statistics once per second
- *   6. With display.overlay and display.conf, show each valid frame on the
- *      DK display (src/display.c)
+ *   5. Isochronous: select the alternate setting that carries the
+ *      negotiated payload size and configure its endpoint
+ *   6. Keep transfers queued, reassemble frames from the UVC payloads,
+ *      validate each frame and log statistics once per second
+ *   7. With display.overlay and display.conf, show each valid frame on the
+ *      DK display (src/display.c) from a thread of its own
  *
  * Build:
  *   west build -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp \
@@ -54,8 +57,22 @@ USBH_CONTROLLER_DEFINE(sample_uhs_ctx, DEVICE_DT_GET(UHC_NODE));
 #define NUM_CHUNKS	4
 #define CHUNK_SIZE	16384
 
+/*
+ * Isochronous IN transfers kept in flight, one per service interval. On
+ * High Speed the 32 cover 4 ms. Each buffer holds the most a High-Speed
+ * endpoint carries per microframe (3 x 1024 bytes) and is aligned so it
+ * never crosses a 64 KiB boundary.
+ */
+#define NUM_ISO_XFERS	32
+#define ISO_BUF_SIZE	4096
+
 /* Wait for a completion before checking that the device is still there */
 #define REAP_TIMEOUT_MS	1000
+
+/* A second frame buffer lets the display show one frame while the next is
+ * received.
+ */
+#define NUM_FRAME_BUFS	(IS_ENABLED(CONFIG_DISPLAY) ? 2 : 1)
 
 /*
  * The USB DMA cannot reach TCM, so the chunks live in SRAM0 (placed by
@@ -67,8 +84,11 @@ USBH_CONTROLLER_DEFINE(sample_uhs_ctx, DEVICE_DT_GET(UHC_NODE));
 
 static uint8_t chunks[NUM_CHUNKS][CHUNK_SIZE] __aligned(CHUNK_SIZE)
 	SRAM0_SECTION;
-static uint8_t frame_buf[CONFIG_SAMPLE_UVC_FRAME_BUFFER_SIZE] __aligned(64)
+static uint8_t iso_bufs[NUM_ISO_XFERS][ISO_BUF_SIZE] __aligned(ISO_BUF_SIZE)
 	SRAM0_SECTION;
+static uint8_t frame_bufs[NUM_FRAME_BUFS][CONFIG_SAMPLE_UVC_FRAME_BUFFER_SIZE]
+	__aligned(64) SRAM0_SECTION;
+static int frame_buf_idx;
 
 static uint8_t cfg_desc[UHC_DWC3_CTRL_MAX_LEN];
 static struct uvc_device uvc;
@@ -85,6 +105,7 @@ static struct {
 	uint32_t bad_frames;
 	uint64_t bytes;
 	uint32_t timeouts;
+	uint32_t lost;		/* Isochronous transfers that lost their data */
 	/* Totals across the window, logged once per second */
 	uint32_t win_frames;
 	uint64_t win_bytes;
@@ -158,6 +179,68 @@ static int usb_host_event_cb(const struct device *dev,
 	return 0;
 }
 
+#if defined(CONFIG_DISPLAY)
+/*
+ * Frames are drawn by a thread of their own, so that the stream keeps being
+ * received meanwhile: an isochronous device does not wait for the host. A
+ * frame that completes while the previous one is still being drawn is not
+ * shown.
+ */
+static K_SEM_DEFINE(display_sem, 0, 1);
+static atomic_t display_busy;
+static const uint8_t *display_buf;
+static size_t display_len;
+
+static void display_thread(void *p1, void *p2, void *p3)
+{
+	ARG_UNUSED(p1);
+	ARG_UNUSED(p2);
+	ARG_UNUSED(p3);
+
+	while (true) {
+		k_sem_take(&display_sem, K_FOREVER);
+		uvc_display_frame(display_buf, display_len);
+		atomic_clear(&display_busy);
+	}
+}
+
+K_THREAD_DEFINE(display_tid, 2048, display_thread, NULL, NULL, NULL,
+		K_PRIO_PREEMPT(5), 0, 0);
+
+static void show_frame(const uint8_t *frame, size_t len)
+{
+	if (!atomic_cas(&display_busy, 0, 1)) {
+		return;
+	}
+
+	display_buf = frame;
+	display_len = len;
+
+	/* Receive the next frames into the other buffer meanwhile */
+	frame_buf_idx = (frame_buf_idx + 1) % NUM_FRAME_BUFS;
+	uvc_stream_set_buffer(&stream, frame_bufs[frame_buf_idx],
+			      sizeof(frame_bufs[0]));
+
+	k_sem_give(&display_sem);
+}
+
+/* Let the frame being drawn finish before the display format changes */
+static void display_wait_idle(void)
+{
+	while (atomic_get(&display_busy)) {
+		k_sleep(K_MSEC(1));
+	}
+}
+#else
+static void show_frame(const uint8_t *frame, size_t len)
+{
+}
+
+static void display_wait_idle(void)
+{
+}
+#endif
+
 /* JPEG: SOI first; EOI last, allowing for a few bytes of zero padding */
 static bool jpeg_ok(const uint8_t *frame, size_t len)
 {
@@ -198,7 +281,7 @@ static void frame_done(const uint8_t *frame, size_t len, bool err)
 	}
 
 	if (!bad) {
-		uvc_display_frame(frame, len);
+		show_frame(frame, len);
 	}
 
 	stats.frames++;
@@ -221,11 +304,12 @@ static void log_stats(void)
 	uint32_t kbps = (uint32_t)(stats.win_bytes / ms); /* bytes/ms = KB/s */
 
 	LOG_INF("%u.%u fps, %u KB/s, avg %u B/frame | frames %u bad %u "
-		"| hdr err %u, stream err %u, overflow %u, timeouts %u",
+		"| hdr err %u, stream err %u, overflow %u, timeouts %u, lost %u",
 		fps_x10 / 10, fps_x10 % 10, kbps,
 		stats.win_frames ? (uint32_t)(stats.win_bytes / stats.win_frames) : 0,
 		stats.frames, stats.bad_frames, stream.bad_headers,
-		stream.err_payloads, stream.overflows, stats.timeouts);
+		stream.err_payloads, stream.overflows, stats.timeouts,
+		stats.lost);
 
 	stats.win_frames = 0;
 	stats.win_bytes = 0;
@@ -240,6 +324,12 @@ static void list_formats(void)
 		uvc.bcd_uvc >> 8, uvc.bcd_uvc & 0xFF, uvc.vs_iface,
 		uvc.ep_type == USB_EP_TYPE_BULK ? "bulk" : "isochronous",
 		uvc.ep, uvc.ep_mps);
+
+	for (int i = 0; i < uvc.num_alts; i++) {
+		LOG_INF("  Alt %u: %u bytes per interval, bInterval %u",
+			uvc.alts[i].alt, uvc_alt_payload(&uvc.alts[i]),
+			uvc.alts[i].interval);
+	}
 
 	for (int i = 0; i < uvc.num_formats; i++) {
 		const struct uvc_format *fmt = &uvc.formats[i];
@@ -341,6 +431,49 @@ static size_t xfer_size(uint32_t max_payload)
 	return len;
 }
 
+/*
+ * Select the isochronous alternate setting that carries the negotiated
+ * payloads, configure its endpoint and select it, which starts the stream.
+ * Returns the transfer size.
+ */
+static int start_isoch(uint32_t max_payload)
+{
+	const struct uvc_alt *alt = uvc_select_alt(&uvc, max_payload);
+	uint32_t len;
+	int ret;
+
+	if (alt == NULL) {
+		LOG_ERR("No alternate setting carries %u byte payloads",
+			max_payload);
+		return -ENOTSUP;
+	}
+
+	len = uvc_alt_payload(alt);
+	LOG_INF("Alternate setting %u: %u bytes per interval, bInterval %u",
+		alt->alt, len, alt->interval);
+
+	if (len > ISO_BUF_SIZE) {
+		return -ENOTSUP;
+	}
+
+	ret = uhc_dwc3_configure_isoch_in(uhc_dev, uvc.ep, alt->mps,
+					  alt->interval);
+	if (ret) {
+		LOG_ERR("Configuring EP 0x%02x failed: %d", uvc.ep, ret);
+		return ret;
+	}
+
+	ret = uhc_dwc3_control_transfer(uhc_dev, 0x01, USB_SREQ_SET_INTERFACE,
+					alt->alt, uvc.vs_iface, 0, NULL);
+	if (ret < 0) {
+		LOG_ERR("SET_INTERFACE %u alt %u failed: %d", uvc.vs_iface,
+			alt->alt, ret);
+		return ret;
+	}
+
+	return len;
+}
+
 /* Enumerate the device and get it streaming; returns the transfer size */
 static int setup_stream(void)
 {
@@ -352,6 +485,7 @@ static int setup_stream(void)
 	uint32_t max_frame;
 	size_t cfg_len;
 	char name[5];
+	int xfer_len;
 	int ret;
 
 	ret = uhc_dwc3_enumerate_device(uhc_dev, &desc);
@@ -380,8 +514,9 @@ static int setup_stream(void)
 
 	list_formats();
 
-	if (uvc.ep_type != USB_EP_TYPE_BULK) {
-		LOG_ERR("Isochronous streaming is not supported, only bulk");
+	if (uvc.ep_type != USB_EP_TYPE_BULK && uvc.ep_type != USB_EP_TYPE_ISO) {
+		LOG_ERR("Streaming endpoint type %u is not supported",
+			uvc.ep_type);
 		return -ENOTSUP;
 	}
 
@@ -399,10 +534,13 @@ static int setup_stream(void)
 		return ret;
 	}
 
-	ret = uhc_dwc3_configure_bulk_in(uhc_dev, uvc.ep, uvc.ep_mps);
-	if (ret) {
-		LOG_ERR("Configuring EP 0x%02x failed: %d", uvc.ep, ret);
-		return ret;
+	if (uvc.ep_type == USB_EP_TYPE_BULK) {
+		ret = uhc_dwc3_configure_bulk_in(uhc_dev, uvc.ep, uvc.ep_mps);
+		if (ret) {
+			LOG_ERR("Configuring EP 0x%02x failed: %d", uvc.ep,
+				ret);
+			return ret;
+		}
 	}
 
 	ret = uvc_negotiate(uhc_dev, &uvc, frame, &probe);
@@ -437,10 +575,10 @@ static int setup_stream(void)
 		return -EINVAL;
 	}
 
-	if (max_frame > sizeof(frame_buf)) {
+	if (max_frame > sizeof(frame_bufs[0])) {
 		LOG_ERR("Frames of up to %u bytes do not fit the %zu byte "
 			"buffer, raise CONFIG_SAMPLE_UVC_FRAME_BUFFER_SIZE",
-			max_frame, sizeof(frame_buf));
+			max_frame, sizeof(frame_bufs[0]));
 		return -ENOMEM;
 	}
 
@@ -448,18 +586,74 @@ static int setup_stream(void)
 	check.expected_size = (fmt->subtype == UVC_VS_FORMAT_UNCOMPRESSED) ?
 		(size_t)frame->width * frame->height * fmt->bpp / 8 : 0;
 
+	display_wait_idle();
 	uvc_display_set_format(fmt, frame->width, frame->height);
 
-	uvc_stream_init(&stream, max_payload, frame_buf, sizeof(frame_buf),
-			frame_done);
+	uvc_stream_init(&stream, max_payload, frame_bufs[frame_buf_idx],
+			sizeof(frame_bufs[0]), frame_done);
 	memset(&stats, 0, sizeof(stats));
 	stats.win_start = k_uptime_get_32();
 
-	return xfer_size(max_payload);
+	if (uvc.ep_type == USB_EP_TYPE_ISO) {
+		xfer_len = start_isoch(max_payload);
+	} else {
+		xfer_len = xfer_size(max_payload);
+	}
+
+	return xfer_len;
 }
 
 /* Receive until the device goes away or the stream fails */
-static void run_stream(size_t xfer_len)
+static void run_isoch(size_t xfer_len)
+{
+	uint8_t *buf;
+	int ret;
+
+	for (int i = 0; i < NUM_ISO_XFERS; i++) {
+		ret = uhc_dwc3_isoch_in_submit(uhc_dev, iso_bufs[i], xfer_len);
+		if (ret) {
+			LOG_ERR("Submitting transfer %d failed: %d", i, ret);
+			return;
+		}
+	}
+
+	while (true) {
+		ret = uhc_dwc3_isoch_in_reap(uhc_dev, &buf, REAP_TIMEOUT_MS);
+		if (ret == -EAGAIN) {
+			/* A streaming isochronous endpoint completes a
+			 * transfer every interval, also with no data.
+			 */
+			stats.timeouts++;
+			if (!port_connected()) {
+				LOG_INF("Device disconnected");
+			} else {
+				LOG_ERR("Isochronous stream stopped");
+			}
+			return;
+		}
+
+		if (ret == -ENODATA || ret == -EIO) {
+			stats.lost++;
+			uvc_stream_lost(&stream);
+		} else if (ret >= 0) {
+			trace_xfer(buf, ret, xfer_len);
+			uvc_stream_feed(&stream, buf, ret, true);
+		} else {
+			LOG_ERR("Isochronous IN failed: %d", ret);
+			return;
+		}
+
+		ret = uhc_dwc3_isoch_in_submit(uhc_dev, buf, xfer_len);
+		if (ret) {
+			LOG_ERR("Resubmitting transfer failed: %d", ret);
+			return;
+		}
+
+		log_stats();
+	}
+}
+
+static void run_bulk(size_t xfer_len)
 {
 	uint8_t *buf;
 	int ret;
@@ -551,7 +745,11 @@ int main(void)
 		/* Returns when the device is unplugged or the stream fails;
 		 * a device that is still attached is enumerated again.
 		 */
-		run_stream(ret);
+		if (uvc.ep_type == USB_EP_TYPE_ISO) {
+			run_isoch(ret);
+		} else {
+			run_bulk(ret);
+		}
 		log_stats();
 	}
 

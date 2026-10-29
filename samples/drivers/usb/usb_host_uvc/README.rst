@@ -8,25 +8,34 @@ Overview
 
 This sample demonstrates USB host mode on Alif Ensemble DK boards using the
 DWC3 controller's xHCI interface to capture video from a **USB Video Class**
-(UVC) device that streams over a **bulk** endpoint.
+(UVC) device. The device can stream over a **bulk** endpoint, as an Alif
+board running the ``video_uvc`` sample does, or over an **isochronous** one,
+as webcams do.
 
 The sample:
 
 1. Waits for a device on the DK USB host port and enumerates it
 2. Reads the configuration descriptor and finds the VideoStreaming interface,
-   its streaming endpoint and the formats and frame sizes it offers, and logs
-   them
-3. Issues ``SET_CONFIGURATION`` and configures the bulk IN streaming endpoint
-   with :c:func:`uhc_dwc3_configure_bulk_in`
+   its streaming endpoint, the formats and frame sizes it offers and, for an
+   isochronous endpoint, the alternate settings that carry it, and logs them
+3. Issues ``SET_CONFIGURATION``. A bulk IN streaming endpoint is configured
+   with :c:func:`uhc_dwc3_configure_bulk_in`.
 4. Negotiates a format and frame size with the UVC **Probe/Commit** controls:
    ``SET_CUR(PROBE)``, ``GET_CUR(PROBE)`` to read back the device's
    ``dwMaxVideoFrameSize`` and ``dwMaxPayloadTransferSize``, then
    ``SET_CUR(COMMIT)``. A bulk device starts streaming once the commit is
    accepted.
-5. Keeps four 16 KiB bulk IN transfers queued with
-   :c:func:`uhc_dwc3_bulk_in_submit` / :c:func:`uhc_dwc3_bulk_in_reap`,
-   strips the UVC payload headers and reassembles the frames
-6. Validates each frame and logs statistics once per second
+5. For an isochronous device, selects the alternate setting with the
+   smallest endpoint that carries ``dwMaxPayloadTransferSize`` per service
+   interval, configures that endpoint with
+   :c:func:`uhc_dwc3_configure_isoch_in` and selects it with
+   ``SET_INTERFACE``, which starts the stream
+6. Keeps transfers queued: four 16 KiB bulk IN transfers with
+   :c:func:`uhc_dwc3_bulk_in_submit` / :c:func:`uhc_dwc3_bulk_in_reap`, or
+   32 isochronous IN transfers, one per service interval, with
+   :c:func:`uhc_dwc3_isoch_in_submit` / :c:func:`uhc_dwc3_isoch_in_reap`.
+   It strips the UVC payload headers and reassembles the frames.
+7. Validates each frame and logs statistics once per second
 
 Unplugging the device is detected and the sample waits for the next one.
 
@@ -56,6 +65,23 @@ An Alif board running the ``video_uvc`` sample sends each frame as a single
 payload: a header padded to the controller's buffer alignment, then the whole
 frame.
 
+Isochronous streaming
+*********************
+
+On an isochronous endpoint each service interval carries one payload: a
+header and up to the rest of what the endpoint carries per interval. On High
+Speed that is one microframe (125 us), with up to three 1024-byte packets on
+a high-bandwidth endpoint, so a camera that streams 640x480 YUY2 at 30 fps
+sends some 3 KB every microframe.
+
+The device does not wait for the host. An interval with no transfer queued
+loses its data, so the sample keeps 32 transfers (4 ms) queued and resubmits
+each as soon as it has been reaped. Frames are drawn on the display by a
+thread of their own while the next frame is received into a second buffer; a
+frame that completes while the previous one is still being drawn is checked
+but not shown. An interval the controller missed, or a transfer that failed,
+is counted as *lost* and marks the frame it belonged to as bad.
+
 Frame validation
 ================
 
@@ -72,12 +98,11 @@ Requirements
 ************
 
 * Alif Ensemble E8 DK
-* A UVC device that streams over bulk, for example an Alif E1C SK running the
-  ``samples/drivers/video_uvc`` sample (RGB565 480x272), connected to the DK
-  USB host port
+* A UVC device, connected to the DK USB host port, for example:
 
-Webcams that stream over isochronous endpoints are not supported: the sample
-lists their formats, then reports that isochronous streaming is not supported.
+  * an Alif E1C SK running the ``samples/drivers/video_uvc`` sample (RGB565
+    480x272, bulk)
+  * a USB webcam (isochronous)
 
 Building and Running
 ********************
@@ -130,7 +155,8 @@ Configuration
   format, ``0`` (default) for the format's default frame
 * :kconfig:option:`CONFIG_SAMPLE_UVC_FRAME_BUFFER_SIZE`: size of the frame
   reassembly buffer in SRAM0, 614400 bytes by default (640x480 at 16 bits per
-  pixel). The device's ``dwMaxVideoFrameSize`` must fit.
+  pixel). The device's ``dwMaxVideoFrameSize`` must fit. With the display
+  there are two buffers of this size.
 
 The format and frame indices are the ones the sample logs at connection.
 
@@ -146,10 +172,10 @@ The format and frame indices are the ones the sample logs at connection.
 Debugging payload framing
 =========================
 
-Set :kconfig:option:`CONFIG_SAMPLE_UVC_TRACE_XFERS` to a number of bulk
+Set :kconfig:option:`CONFIG_SAMPLE_UVC_TRACE_XFERS` to a number of
 transfers (up to 64) to log the length and first bytes of each of the first
 transfers once they have arrived, with their offset from the start of the
-payload. A healthy stream from ``video_uvc`` at 480x272 shows 15 transfers of
+payload. Each isochronous transfer is a payload of its own. A healthy stream from ``video_uvc`` at 480x272 shows 15 transfers of
 16384 bytes and a short one of 15392 bytes per frame, each frame starting
 with the header bytes ``20 02`` or ``20 03``.
 
@@ -159,7 +185,12 @@ Statistics
 Once per second the sample logs the frame rate, throughput and average frame
 size over the last second, followed by running totals: frames received, bad
 frames, payloads with a malformed header, payloads with the ERR bit set,
-frames that overflowed the buffer, and bulk transfers that timed out.
+frames that overflowed the buffer, transfers that timed out, and isochronous
+transfers that lost their data.
+
+An isochronous stream completes a transfer every interval, also when the
+device has no data to send, so a timeout ends it: the device is enumerated
+again if it is still attached.
 
 Sample output
 =============
@@ -178,13 +209,14 @@ E8 DK RTSS-HP with an E1C SK running ``video_uvc``, built with
    <inf> usb_host_uvc: Streaming format 1 (RGBP) frame 3: 480x272, interval 33333300 ns
    <inf> usb_host_uvc:   dwMaxVideoFrameSize 261120, dwMaxPayloadTransferSize 261375
    <inf> usb_host_uvc: First frame: 261120 bytes, starts 20 00 20 00
-   <inf> usb_host_uvc: 7.8 fps, 2050 KB/s, avg 261120 B/frame | frames 8 bad 0 | hdr err 0, stream err 0, overflow 0, timeouts 0
-   <inf> usb_host_uvc: 8.0 fps, 2088 KB/s, avg 261120 B/frame | frames 16 bad 0 | hdr err 0, stream err 0, overflow 0, timeouts 0
+   <inf> usb_host_uvc: 7.8 fps, 2050 KB/s, avg 261120 B/frame | frames 8 bad 0 | hdr err 0, stream err 0, overflow 0, timeouts 0, lost 0
+   <inf> usb_host_uvc: 8.0 fps, 2088 KB/s, avg 261120 B/frame | frames 16 bad 0 | hdr err 0, stream err 0, overflow 0, timeouts 0, lost 0
 
 Memory placement
 ****************
 
 The USB controller's DMA cannot reach the M55 TCM, so ``uhc_dma.ld`` places
-the driver's DMA buffers, the sample's bulk transfer chunks and its frame
-buffer in SRAM0. Each chunk is aligned to its size so that it never crosses a
-64 KiB boundary, which an xHCI transfer descriptor must not do.
+the driver's DMA buffers, the sample's bulk and isochronous transfer buffers
+and its frame buffers in SRAM0. Each transfer buffer is aligned to its size so
+that it never crosses a 64 KiB boundary, which an xHCI transfer descriptor
+must not do.

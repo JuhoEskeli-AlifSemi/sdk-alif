@@ -28,12 +28,12 @@ config SAMPLE_UVC_FRAME_BUFFER_SIZE
 	  default holds a 640x480 frame at 16 bits per pixel.
 
 config SAMPLE_UVC_TRACE_XFERS
-	int "Log the first N bulk transfers"
+	int "Log the first N transfers"
 	range 0 64
 	default 0
 	help
-	  Record the length and first bytes of the first N bulk IN transfers
-	  after the first stream starts and log them once N have arrived, to
-	  debug payload framing. 0 disables the trace.
+	  Record the length and first bytes of the first N bulk or isochronous
+	  IN transfers after the first stream starts and log them once N have
+	  arrived, to debug payload framing. 0 disables the trace.
 
 source "Kconfig.zephyr"

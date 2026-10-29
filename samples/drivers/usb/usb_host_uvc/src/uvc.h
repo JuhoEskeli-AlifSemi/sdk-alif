@@ -21,6 +21,7 @@
 /* Limits on what the descriptor parser records */
 #define UVC_MAX_FORMATS		8
 #define UVC_MAX_FRAMES		64
+#define UVC_MAX_ALTS		16
 
 /* Payload header bmHeaderInfo bits (UVC 1.5, 2.4.3.3) */
 #define UVC_HDR_FID		BIT(0)
@@ -48,6 +49,19 @@ struct uvc_frame {
 	uint32_t default_interval; /* dwDefaultFrameInterval, 100 ns units */
 };
 
+/* A VideoStreaming alternate setting with an isochronous endpoint */
+struct uvc_alt {
+	uint8_t alt;		/* bAlternateSetting */
+	uint16_t mps;		/* wMaxPacketSize, additional transactions included */
+	uint8_t interval;	/* bInterval */
+};
+
+/* Bytes the endpoint of an alternate setting carries per service interval */
+static inline uint32_t uvc_alt_payload(const struct uvc_alt *alt)
+{
+	return (alt->mps & 0x7FF) * (1 + ((alt->mps >> 11) & 0x3));
+}
+
 /* What the configuration descriptor says about the video function */
 struct uvc_device {
 	uint8_t cfg_val;	/* bConfigurationValue */
@@ -58,8 +72,11 @@ struct uvc_device {
 	uint16_t ep_mps;	/* wMaxPacketSize bits 10:0 */
 	uint8_t num_formats;
 	uint8_t num_frames;
+	uint8_t num_alts;
 	struct uvc_format formats[UVC_MAX_FORMATS];
 	struct uvc_frame frames[UVC_MAX_FRAMES];
+	/* Isochronous endpoints: the alternate settings that carry them */
+	struct uvc_alt alts[UVC_MAX_ALTS];
 };
 
 /* Video Probe and Commit control (UVC 1.5, 4.3.1.1) */
@@ -124,6 +141,13 @@ const struct uvc_frame *uvc_find_frame(const struct uvc_device *uvc,
 const char *uvc_format_name(const struct uvc_format *fmt, char buf[5]);
 
 /*
+ * The alternate setting with the smallest isochronous endpoint that carries
+ * payloads of @p max_payload bytes, or NULL if none does.
+ */
+const struct uvc_alt *uvc_select_alt(const struct uvc_device *uvc,
+				     uint32_t max_payload);
+
+/*
  * Parse a configuration descriptor. Records the first VideoStreaming
  * interface, its streaming endpoint and its formats and frames.
  */
@@ -142,10 +166,24 @@ void uvc_stream_init(struct uvc_stream *s, uint32_t max_payload,
 					bool err));
 
 /*
- * Feed one completed bulk IN transfer. @p short_xfer is true when the
- * transfer ended on a short packet, which ends the current payload.
+ * Feed one completed transfer. @p short_xfer is true when the transfer
+ * ended on a short packet, which ends the current payload. Each isochronous
+ * transfer is one whole payload, so pass true for those.
  */
 void uvc_stream_feed(struct uvc_stream *s, const uint8_t *data, size_t len,
 		     bool short_xfer);
+
+/*
+ * Report stream data that never arrived, such as a missed isochronous
+ * interval. The frame it belonged to is flagged as an error.
+ */
+void uvc_stream_lost(struct uvc_stream *s);
+
+/*
+ * Reassemble the next frames into another buffer, e.g. while the last one
+ * is still being shown. Can be called from the frame_done callback.
+ */
+void uvc_stream_set_buffer(struct uvc_stream *s, uint8_t *frame_buf,
+			   size_t frame_buf_size);
 
 #endif /* USB_HOST_UVC_H_ */

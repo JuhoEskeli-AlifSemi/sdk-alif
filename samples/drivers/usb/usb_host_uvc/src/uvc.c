@@ -79,6 +79,24 @@ const char *uvc_format_name(const struct uvc_format *fmt, char buf[5])
 	return buf;
 }
 
+const struct uvc_alt *uvc_select_alt(const struct uvc_device *uvc,
+				     uint32_t max_payload)
+{
+	const struct uvc_alt *best = NULL;
+
+	for (int i = 0; i < uvc->num_alts; i++) {
+		const struct uvc_alt *alt = &uvc->alts[i];
+
+		if (uvc_alt_payload(alt) >= max_payload &&
+		    (best == NULL ||
+		     uvc_alt_payload(alt) < uvc_alt_payload(best))) {
+			best = alt;
+		}
+	}
+
+	return best;
+}
+
 static void parse_format(const uint8_t *d, uint8_t dlen,
 			 struct uvc_device *uvc)
 {
@@ -132,6 +150,19 @@ static void parse_frame(const uint8_t *d, uint8_t dlen,
 	frm->width = sys_get_le16(&d[5]);
 	frm->height = sys_get_le16(&d[7]);
 	frm->default_interval = sys_get_le32(&d[interval_off]);
+}
+
+static void parse_alt(const uint8_t *d, uint8_t alt, struct uvc_device *uvc)
+{
+	if (uvc->num_alts >= UVC_MAX_ALTS) {
+		LOG_WRN("Too many alternate settings, ignoring alt %u", alt);
+		return;
+	}
+
+	uvc->alts[uvc->num_alts].alt = alt;
+	uvc->alts[uvc->num_alts].mps = sys_get_le16(&d[4]);
+	uvc->alts[uvc->num_alts].interval = d[6];
+	uvc->num_alts++;
 }
 
 int uvc_parse_config(const uint8_t *desc, size_t len, struct uvc_device *uvc)
@@ -190,14 +221,22 @@ int uvc_parse_config(const uint8_t *desc, size_t len, struct uvc_device *uvc)
 				parse_frame(d, dlen, uvc);
 			}
 		} else if (dtype == USB_DESC_ENDPOINT && dlen >= 7 && in_vs &&
-			   d[2] == vs_ep && uvc->ep == 0) {
+			   d[2] == vs_ep) {
 			/* A bulk endpoint sits in alt 0; isochronous ones in
-			 * the alternate settings, the first one recorded.
+			 * the alternate settings, one per bandwidth.
 			 */
-			uvc->ep = d[2];
-			uvc->ep_type = d[3] & USB_EP_TRANSFER_TYPE_MASK;
-			uvc->ep_mps = sys_get_le16(&d[4]) & 0x7FF;
-			LOG_DBG("Streaming EP 0x%02x in alt %u", d[2], vs_alt);
+			if (uvc->ep == 0) {
+				uvc->ep = d[2];
+				uvc->ep_type = d[3] & USB_EP_TRANSFER_TYPE_MASK;
+				uvc->ep_mps = sys_get_le16(&d[4]) & 0x7FF;
+				LOG_DBG("Streaming EP 0x%02x in alt %u", d[2],
+					vs_alt);
+			}
+
+			if ((d[3] & USB_EP_TRANSFER_TYPE_MASK) ==
+			    USB_EP_TYPE_ISO && vs_alt != 0) {
+				parse_alt(d, vs_alt, uvc);
+			}
 		}
 
 		off += dlen;
@@ -209,6 +248,10 @@ int uvc_parse_config(const uint8_t *desc, size_t len, struct uvc_device *uvc)
 
 	if (uvc->ep == 0 || uvc->ep_mps == 0 || uvc->num_formats == 0 ||
 	    uvc->num_frames == 0) {
+		return -EINVAL;
+	}
+
+	if (uvc->ep_type == USB_EP_TYPE_ISO && uvc->num_alts == 0) {
 		return -EINVAL;
 	}
 
@@ -289,6 +332,19 @@ void uvc_stream_init(struct uvc_stream *s, uint32_t max_payload,
 	s->last_fid = -1;
 }
 
+void uvc_stream_set_buffer(struct uvc_stream *s, uint8_t *frame_buf,
+			   size_t frame_buf_size)
+{
+	s->frame_buf = frame_buf;
+	s->frame_buf_size = frame_buf_size;
+}
+
+void uvc_stream_lost(struct uvc_stream *s)
+{
+	s->frame_err = true;
+	s->in_payload = false;
+}
+
 static void frame_complete(struct uvc_stream *s)
 {
 	if (s->frame_len > 0 || s->frame_err) {
@@ -322,7 +378,8 @@ static void frame_append(struct uvc_stream *s, const uint8_t *data,
  * A bulk payload is one header plus data, ended by a short packet or by
  * reaching dwMaxPayloadTransferSize (UVC 1.5, 2.4.3.2). Each submitted
  * transfer is a multiple of the packet size, so a payload always starts at
- * the beginning of a transfer.
+ * the beginning of a transfer. An isochronous payload is what arrives in one
+ * service interval, so it is always one whole transfer.
  */
 void uvc_stream_feed(struct uvc_stream *s, const uint8_t *data, size_t len,
 		     bool short_xfer)
@@ -353,9 +410,12 @@ void uvc_stream_feed(struct uvc_stream *s, const uint8_t *data, size_t len,
 			fid = info & UVC_HDR_FID;
 
 			/* A toggled FID starts a new frame, also when the
-			 * device does not mark the previous one with EOF.
+			 * device does not mark the previous one with EOF. If
+			 * nothing of the previous frame is pending, an error
+			 * flagged since (lost data) belongs to the new one.
 			 */
-			if (s->last_fid >= 0 && fid != s->last_fid) {
+			if (s->last_fid >= 0 && fid != s->last_fid &&
+			    s->frame_len > 0) {
 				frame_complete(s);
 			}
 			s->last_fid = fid;
