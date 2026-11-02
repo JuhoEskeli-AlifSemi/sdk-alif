@@ -39,7 +39,9 @@ Unplugging is detected; the sample then waits for the next device.
 
 Source files:
 
-* ``src/uvc.c``: descriptor parsing, Probe/Commit, payload reassembly
+* ``zephyr/drivers/usb/uhc/uvc_host.c`` (``CONFIG_UVC_HOST``, shared with
+  the ``alif,uvc-host`` video driver): descriptor parsing, Probe/Commit,
+  payload reassembly
 * ``src/main.c``: device handling and streaming
 * ``src/display.c``: display output
 

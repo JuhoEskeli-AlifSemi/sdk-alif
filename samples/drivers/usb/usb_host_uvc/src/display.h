@@ -11,7 +11,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#include "uvc.h"
+#include <zephyr/drivers/usb/uvc_host.h>
 
 #if defined(CONFIG_DISPLAY)
 

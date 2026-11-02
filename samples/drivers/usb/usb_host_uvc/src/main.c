@@ -38,7 +38,7 @@
 #include <zephyr/sys/byteorder.h>
 
 #include "display.h"
-#include "uvc.h"
+#include <zephyr/drivers/usb/uvc_host.h>
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(usb_host_uvc, LOG_LEVEL_INF);
