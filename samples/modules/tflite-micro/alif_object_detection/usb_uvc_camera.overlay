@@ -1,0 +1,25 @@
+/*
+ * Copyright (c) 2026 Alif Semiconductor
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * USB webcam (UVC) on the E8 DK USB host port as the camera, through the
+ * alif,uvc-host video driver. Use with usb_uvc_camera.conf.
+ */
+
+/*
+ * USB controller in host mode, so the DWC3 host driver binds. Its DMA buffers
+ * are in SRAM0; the ns region must stay disabled, as it would make part of the
+ * DTCM that this application uses non-secure.
+ */
+zephyr_uhc0: &usb {
+	compatible = "snps,dwc3-host";
+	status = "okay";
+};
+
+/ {
+	uvc_camera: uvc-camera {
+		compatible = "alif,uvc-host";
+		usb-controller = <&zephyr_uhc0>;
+		status = "okay";
+	};
+};

@@ -22,7 +22,20 @@
 #define PIXEL_BYTES 	1
 
 // Camera dimensions
-#if CONFIG_DT_HAS_ONNN_ARX3A0_ENABLED
+#if CONFIG_DT_HAS_ALIF_UVC_HOST_ENABLED
+/*
+ * USB webcam (usb_uvc_camera.overlay) through the alif,uvc-host video driver.
+ * Streams 320x240 YUY2; a centred square is converted straight to RGB888.
+ */
+#define CIMAGE_X                (320)
+#define CIMAGE_Y                (240)
+#define CIMAGE_COLOR_CORRECTION (0)
+#define CIMAGE_EXPOSURE_CALC    (0)
+#define CIMAGE_RGB_WIDTH_MAX    (240)
+#define CIMAGE_RGB_HEIGHT_MAX   (240)
+#define CAMERA_OUTPUT_RGB565    (0)
+#define CAMERA_OUTPUT_YUYV      (1)
+#elif CONFIG_DT_HAS_ONNN_ARX3A0_ENABLED
 #define CIMAGE_X                (560)
 #define CIMAGE_Y                (560)
 #define CIMAGE_COLOR_CORRECTION (0)
@@ -70,6 +83,10 @@
 #define CAMERA_OUTPUT_RGB565    (1)
 #else
 #error "Unsupported camera"
+#endif
+
+#ifndef CAMERA_OUTPUT_YUYV
+#define CAMERA_OUTPUT_YUYV      (0)
 #endif
 
 /*error status*/

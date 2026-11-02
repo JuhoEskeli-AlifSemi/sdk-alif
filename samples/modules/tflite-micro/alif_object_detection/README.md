@@ -21,6 +21,7 @@ There is also separate thread which updates LVGL graphics.
 - Alif E8-DK HP & OV5675 serial camera (+ISP) & MW-405 display
 - Alif E8-AK HP & OV5675 serial camera (non-ISP) & MW-405 display
 - Alif StartKit-E1C & ov5640 without display
+- Alif E8-DK HP & USB webcam (UVC) & MW-405 display
 
 ## Prerequisites
 Before building, set up the MLEK resources (downloads and Vela-compiles the ML models):
@@ -83,6 +84,18 @@ ov5675 & ISP:
 ```
 west build -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp -S ethos-u55-enable   samples/modules/tflite-micro/alif_object_detection --   -DEXTRA_DTC_OVERLAY_FILE="serial_camera_ov5675_selfie.overlay serial_camera_isp.overlay" -DOVERLAY_CONFIG="isp.conf"
 ```
+
+## Building and running: E8-DK with a USB webcam
+The camera is a USB Video Class webcam on the DK USB host port, through the
+`alif,uvc-host` video driver (`zephyr/drivers/video/video_uvc_host.c`). It streams 320x240 YUY2;
+a centred 240x240 square is converted to RGB888 and scaled to the model input.
+```
+west build -b alif_e8_dk/ae822fa0e5597xx0/rtss_hp -S ethos-u55-enable samples/modules/tflite-micro/alif_object_detection -- -DEXTRA_DTC_OVERLAY_FILE="usb_uvc_camera.overlay" -DOVERLAY_CONFIG="usb_uvc_camera.conf"
+```
+- The webcam must offer 320x240 YUY2.
+- The application waits at start-up until a webcam is plugged in.
+- Requires the DWC3 USB host driver with isochronous streaming support
+  (`uhc_dwc3.h`).
 
 ## Building and running: E8-AK
 Note: The build command below is for U55.

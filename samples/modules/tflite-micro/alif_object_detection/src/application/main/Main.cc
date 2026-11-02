@@ -149,7 +149,7 @@ int main()
  */
 static int app_set_parameters(void)
 {
-#if (DT_NODE_HAS_STATUS(DT_NODELABEL(cam), okay))
+#if (DT_NODE_HAS_STATUS(DT_NODELABEL(cam), okay) || DT_HAS_COMPAT_STATUS_OKAY(alif_uvc_host))
 	int ret;
 	run_profile_t runp = (run_profile_t){0};
 
@@ -190,6 +190,10 @@ static int app_set_parameters(void)
 	runp.phy_pwr_gating |= MIPI_TX_DPHY_MASK | MIPI_RX_DPHY_MASK |
 		MIPI_PLL_DPHY_MASK | LDO_PHY_MASK;
 	runp.ip_clock_gating = CDC200_MASK | CAMERA_MASK | MIPI_CSI_MASK | MIPI_DSI_MASK;
+#if DT_HAS_COMPAT_STATUS_OKAY(alif_uvc_host)
+	/* USB webcam on the DWC3 host port */
+	runp.phy_pwr_gating |= USB_PHY_MASK;
+#endif
 
 	ret = se_service_set_run_cfg(&runp);
 	__ASSERT(ret == 0, "SE: set_run_cfg failed = %d", ret);

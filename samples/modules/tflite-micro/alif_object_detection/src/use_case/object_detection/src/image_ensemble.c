@@ -49,7 +49,13 @@ int log_level(void)
 }
 #endif
 
-#if defined(CONFIG_SOC_SERIES_E8)
+#if CAMERA_OUTPUT_YUYV
+/*
+ * USB webcam: the camera streams continuously, so with a second buffer one
+ * is always being filled while the other is processed.
+ */
+#define VIDEO_BUFFER_COUNT 2
+#elif defined(CONFIG_SOC_SERIES_E8)
 #if ISP_ENABLED
 #define VIDEO_BUFFER_COUNT CONFIG_VIDEO_BUFFER_POOL_NUM_MAX
 #else
@@ -185,6 +191,9 @@ int image_init(int req_output_width, int req_output_height)
 	#if ISP_ENABLED
 	video_dev = DEVICE_DT_GET_ONE(vsi_isp_pico);
 	ep = VIDEO_EP_IN;
+	#elif CAMERA_OUTPUT_YUYV
+	/* Waits in video_get_caps() below until a webcam is plugged in */
+	video_dev = DEVICE_DT_GET_ONE(alif_uvc_host);
 	#else
 	video_dev = DEVICE_DT_GET_ONE(alif_cam);
 	#endif
@@ -213,7 +222,14 @@ int image_init(int req_output_width, int req_output_height)
 		       fcap->width_min, fcap->width_max, fcap->width_step,
 		       fcap->height_min, fcap->height_max, fcap->height_step);
 
-#if CAMERA_OUTPUT_RGB565
+#if CAMERA_OUTPUT_YUYV
+		if (fcap->pixelformat == VIDEO_PIX_FMT_YUYV &&
+		    fcap->width_min == CIMAGE_X && fcap->height_min == CIMAGE_Y) {
+			fmt.pixelformat = VIDEO_PIX_FMT_YUYV;
+			fmt.width = fcap->width_min;
+			fmt.height = fcap->height_min;
+		}
+#elif CAMERA_OUTPUT_RGB565
 		if (fcap->pixelformat == VIDEO_PIX_FMT_RGB565 &&
 		    fcap->width_min == CIMAGE_X && fcap->height_min == CIMAGE_Y) {
 			fmt.pixelformat = VIDEO_PIX_FMT_RGB565;
@@ -333,7 +349,26 @@ int get_image_data(uint8_t **output_image_data)
 	uint8_t *raw_image = vbuf->buffer;
 
 	#if !ISP_ENABLED
-	#if CAMERA_OUTPUT_RGB565
+	#if CAMERA_OUTPUT_YUYV
+	/*
+	 * USB webcam: convert the centred square straight from YUY2 to the
+	 * RGB888 the detector expects (the pitch skips the rest of each row).
+	 * An even left edge keeps the YUY2 pixel pairs intact.
+	 */
+	BUILD_ASSERT(((CIMAGE_X - CIMAGE_RGB_WIDTH_MAX) / 2) % 2 == 0,
+		     "YUY2 crop must start on a pixel pair");
+	uint32_t x0 = (CIMAGE_X - CIMAGE_RGB_WIDTH_MAX) / 2;
+	uint32_t y0 = (CIMAGE_Y - CIMAGE_RGB_HEIGHT_MAX) / 2;
+
+	aipl_ret = aipl_color_convert(raw_image + (y0 * CIMAGE_X + x0) * 2,
+				      image_data, CIMAGE_X,
+				      CIMAGE_RGB_WIDTH_MAX, CIMAGE_RGB_HEIGHT_MAX,
+				      AIPL_COLOR_YUY2, AIPL_COLOR_RGB888);
+	if (aipl_ret != AIPL_ERR_OK) {
+		LOG_ERR("YUY2->RGB888 conversion failed with error code %d", aipl_ret);
+		return -1;
+	}
+	#elif CAMERA_OUTPUT_RGB565
 	/*
 	 * OV5640 path: the sensor already delivers RGB565. Centre-crop to a
 	 * square and expand to the RGB888 the detector expects. The shared
