@@ -97,4 +97,29 @@ void write_rgb888_to_rgb565_buf(int width, int height,
 #endif
 	}
 }
+
+/* Convert RGB888 to RGB565 at twice the size; dst is assumed 32-bit aligned */
+void write_rgb888_to_rgb565_buf_2x(int width, int height,
+				   const uint8_t *restrict src,
+				   uint16_t *restrict dst)
+{
+	const int dst_width = 2 * width;
+
+	for (int y = 0; y < height; y++) {
+		const uint8_t *restrict s = src + (size_t)y * width * RGB_BYTES;
+		uint16_t *row = dst + (size_t)(2 * y) * dst_width;
+		uint32_t *restrict d = (uint32_t *)row;
+
+		for (int x = 0; x < width; x++, s += RGB_BYTES) {
+			/* RGB565: RRRRRGGG GGGBBBBB, the same pixel twice */
+			uint32_t p = ((s[0] & 0xF8) << 8) | ((s[1] & 0xFC) << 3) |
+				     (s[2] >> 3);
+
+			d[x] = p | (p << 16);
+		}
+
+		/* The next row is the same */
+		memcpy(row + dst_width, row, dst_width * RGB565_BYTES);
+	}
+}
 #endif

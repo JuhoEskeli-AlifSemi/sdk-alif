@@ -17,6 +17,14 @@ void write_rgb888_to_rgb565_buf(int width, int height,
 				const uint8_t *src,
 				uint16_t *dst);
 
+/*
+ * Convert RGB888 to RGB565 at twice the size: each pixel becomes 2x2, so dst
+ * is (2 * width) x (2 * height). dst must be 32-bit aligned.
+ */
+void write_rgb888_to_rgb565_buf_2x(int width, int height,
+				   const uint8_t *src,
+				   uint16_t *dst);
+
 #ifdef __cplusplus
 }
 #endif

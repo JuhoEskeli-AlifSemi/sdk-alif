@@ -13,6 +13,16 @@ config MODEL_SECTION
 # LVGL UI options only apply when the display stack is enabled.
 if LVGL
 
+config OD_LIVE_PREVIEW
+	bool "Show every camera frame, independently of inference"
+	default y if DT_HAS_ALIF_UVC_HOST_ENABLED
+	help
+	  A separate thread shows each camera frame as it arrives and offers
+	  it to inference, which takes the newest one whenever it is free.
+	  The image then moves at the camera frame rate and the detection
+	  boxes follow at the inference rate. Without it the image is updated
+	  once per inference.
+
 config LV_FONT_MONTSERRAT_16
 	default y
 

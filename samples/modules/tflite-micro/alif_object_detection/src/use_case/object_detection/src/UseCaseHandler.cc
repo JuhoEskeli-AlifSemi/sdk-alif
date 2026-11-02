@@ -37,6 +37,7 @@
 #include "ScreenLayout.hpp"
 #include <lvgl.h>
 #include "lv_paint_utils.h"
+#include "lv_page_flip.h"
 #endif
 
 #include <zephyr/kernel.h>
@@ -44,8 +45,11 @@
 
 LOG_MODULE_REGISTER(UseCaseHandler);
 
-// Do we get LVGL to zoom the camera image, or do we double it up?
-#define USE_LVGL_ZOOM
+/*
+ * The camera image is shown at twice the model input size. It is doubled up
+ * while converting to RGB565 (write_rgb888_to_rgb565_buf_2x()); having LVGL
+ * zoom it instead costs a software transform of every pixel on each redraw.
+ */
 
 #define ASSERT_DIVISIBLE_BY_16(V) \
     static_assert(((V) % 16) == 0, \
@@ -55,14 +59,33 @@ LOG_MODULE_REGISTER(UseCaseHandler);
 ASSERT_DIVISIBLE_BY_16(MIMAGE_X);
 #define MIMAGE_Y 192
 
-#ifdef USE_LVGL_ZOOM
-#define LIMAGE_X        MIMAGE_X
-#define LIMAGE_Y        MIMAGE_Y
-#define LV_ZOOM         (2 * 256)
-#else
 #define LIMAGE_X        (MIMAGE_X * 2)
 #define LIMAGE_Y        (MIMAGE_Y * 2)
 #define LV_ZOOM         (1 * 256)
+
+/*
+ * Timing, summarised once per second with the results. All times are in
+ * k_cycle_get_32() cycles and summed over the period.
+ */
+static struct {
+    uint32_t inferences;
+    uint32_t capture;   /* Waiting for and converting a camera frame */
+    uint32_t show;      /* Locking LVGL and copying the frame into it */
+    uint32_t pre;
+    uint32_t npu;
+    uint32_t post;
+    uint32_t boxes;     /* Locking LVGL and updating the boxes */
+    uint32_t previews;  /* Live preview: frames shown */
+    uint32_t preview;   /* Live preview: converting and showing them */
+    uint32_t renders;   /* lv_timer_handler() calls that drew something */
+    uint32_t render;
+} timing;
+
+#if defined(CONFIG_LVGL)
+static inline uint32_t CyclesToUs(uint32_t cycles, uint32_t count)
+{
+    return count ? k_cyc_to_us_floor32(cycles / count) : 0;
+}
 #endif
 
 #if defined(CONFIG_LVGL)
@@ -76,8 +99,17 @@ static void lvgl_worker_thread(void*, void*, void*)
     while (1)
     {
         k_mutex_lock(&lvgl_mutex, K_FOREVER);
+        uint32_t start = k_cycle_get_32();
         time = lv_task_handler();
+        uint32_t spent = k_cycle_get_32() - start;
         k_mutex_unlock(&lvgl_mutex);
+
+        /* Count only the calls that redrew the screen */
+        if (k_cyc_to_us_floor32(spent) > 1000) {
+            timing.renders++;
+            timing.render += spent;
+        }
+
         if(time < 1) {
             time = 1;
         } else if (time > LV_DEF_REFR_PERIOD) {
@@ -89,7 +121,22 @@ static void lvgl_worker_thread(void*, void*, void*)
 
 namespace {
 lv_style_t boxStyle;
-lv_color_t  lvgl_image[LIMAGE_Y][LIMAGE_X] __attribute__((section("SRAM1.lcd_image_buf")));                      // 192x192x3 = 110,592 bytes
+/* RGB565, LIMAGE_X x LIMAGE_Y = 294,912 bytes */
+uint16_t lvgl_image[LIMAGE_Y][LIMAGE_X] __aligned(4) __attribute__((section("SRAM1.lcd_image_buf")));
+
+#if defined(CONFIG_OD_LIVE_PREVIEW)
+/*
+ * Live preview: a thread takes every camera frame, shows it and offers it to
+ * inference, which takes the newest one whenever it is free. The image then
+ * moves at the camera frame rate; the boxes follow at the inference rate.
+ */
+K_THREAD_STACK_DEFINE(preview_thread_stack, 1024 * 4);
+struct k_thread preview_thread;
+K_MUTEX_DEFINE(frame_lock);     /* Guards inferenceFrame */
+K_SEM_DEFINE(frame_ready, 0, 1);
+uint8_t inferenceFrame[MIMAGE_X * MIMAGE_Y * 3] __aligned(4)
+    __attribute__((section("SRAM1.inference_frame_buf")));
+#endif
 
 /* Pre-allocated pool of detection box objects to avoid per-frame alloc/free */
 static constexpr int MAX_DETECTION_BOXES = 10;
@@ -120,6 +167,43 @@ namespace app {
            const std::vector<object_detection::DetectionResult>& results,
            int imgInputCols, int imgInputRows);
 #endif /* CONFIG_LVGL */
+
+#if defined(CONFIG_OD_LIVE_PREVIEW)
+    static void PreviewThread(void*, void*, void*)
+    {
+        while (true) {
+            uint8_t* frame = nullptr;
+
+            if (get_image_data(&frame) < 0) {
+                LOG_ERR("Couldn't get image data");
+                k_msleep(100);
+                continue;
+            }
+
+            uint32_t start = k_cycle_get_32();
+
+            k_mutex_lock(&lvgl_mutex, K_FOREVER);
+            write_rgb888_to_rgb565_buf_2x(MIMAGE_X, MIMAGE_Y, frame, &lvgl_image[0][0]);
+            lv_obj_invalidate(ScreenLayoutImageObject());
+            /*
+             * Draw it now: waiting for LVGL's refresh timer (every
+             * LV_DEF_REFR_PERIOD) drops a frame whenever two arrive
+             * within one period.
+             */
+            lv_refr_now(NULL);
+            k_mutex_unlock(&lvgl_mutex);
+
+            /* The newest frame replaces one inference has not taken yet */
+            k_mutex_lock(&frame_lock, K_FOREVER);
+            memcpy(inferenceFrame, frame, sizeof(inferenceFrame));
+            k_mutex_unlock(&frame_lock);
+            k_sem_give(&frame_ready);
+
+            timing.previews++;
+            timing.preview += k_cycle_get_32() - start;
+        }
+    }
+#endif /* CONFIG_OD_LIVE_PREVIEW */
 
     bool ObjectDetectionInit()
     {
@@ -153,9 +237,17 @@ namespace app {
 	    k_thread_name_set(&lvgl_thread, "lvgl");
 #endif /* CONFIG_LVGL */
 
-        if (image_init(LIMAGE_X, LIMAGE_Y) != 0) {
+        if (image_init(MIMAGE_X, MIMAGE_Y) != 0) {
             return false;
         }
+
+#if defined(CONFIG_OD_LIVE_PREVIEW)
+        k_thread_create(&preview_thread, preview_thread_stack,
+                        K_THREAD_STACK_SIZEOF(preview_thread_stack),
+                        PreviewThread, NULL, NULL, NULL,
+                        0, 0, K_NO_WAIT);
+        k_thread_name_set(&preview_thread, "preview");
+#endif
 
         return true;
     }
@@ -199,46 +291,66 @@ namespace app {
         DetectorPostProcess postProcess =
             DetectorPostProcess(outputTensor0, outputTensor1, results, postProcessParams);
 
+        const size_t copySz = inputTensor->Bytes();
+        uint32_t t0 = k_cycle_get_32();
+        uint32_t t1;
+
+#if defined(CONFIG_OD_LIVE_PREVIEW)
+        /* The newest frame the preview thread offered */
+        k_sem_take(&frame_ready, K_FOREVER);
+        t1 = k_cycle_get_32();
+        timing.capture += t1 - t0;
+
+        k_mutex_lock(&frame_lock, K_FOREVER);
+        bool preOk = preProcess.DoPreProcess(inferenceFrame, copySz);
+        k_mutex_unlock(&frame_lock);
+#else
         uint8_t* imageDataPtr = nullptr;
         if(get_image_data(&imageDataPtr) < 0) {
             LOG_ERR("Couldn't get image data");
             return false;
         }
+        t1 = k_cycle_get_32();
+        timing.capture += t1 - t0;
 
 #if defined(CONFIG_LVGL)
         k_mutex_lock(&lvgl_mutex, K_FOREVER);
-
-        #if LV_COLOR_DEPTH == 16
-        write_rgb888_to_rgb565_buf(
-                MIMAGE_X, MIMAGE_Y, imageDataPtr, (uint16_t*) &lvgl_image[0][0]);
-        #elif LV_COLOR_DEPTH == 24
-            memcpy(&lvgl_image[0][0], imageDataPtr, MIMAGE_X * MIMAGE_Y * 3);
-        #else
-        #error "Unsupported LVGL color depth"
-        #endif
-
+        write_rgb888_to_rgb565_buf_2x(MIMAGE_X, MIMAGE_Y, imageDataPtr, &lvgl_image[0][0]);
         lv_obj_invalidate(ScreenLayoutImageObject());
-
         k_mutex_unlock(&lvgl_mutex);
 #endif /* CONFIG_LVGL */
 
-        const size_t copySz = inputTensor->Bytes();
+        t0 = k_cycle_get_32();
+        timing.show += t0 - t1;
+        t1 = t0;
 
         /* Run the pre-processing, inference and post-processing. */
-        if (!preProcess.DoPreProcess(imageDataPtr, copySz)) {
+        bool preOk = preProcess.DoPreProcess(imageDataPtr, copySz);
+#endif /* CONFIG_OD_LIVE_PREVIEW */
+
+        if (!preOk) {
             LOG_ERR("Pre-processing failed.");
             return false;
         }
+
+        t0 = k_cycle_get_32();
+        timing.pre += t0 - t1;
 
         if (!model.RunInference()) {
             LOG_ERR("Inference failed.");
             return false;
         }
 
+        t1 = k_cycle_get_32();
+        timing.npu += t1 - t0;
+
         if (!postProcess.DoPostProcess()) {
             LOG_ERR("Post-processing failed.");
             return false;
         }
+
+        t0 = k_cycle_get_32();
+        timing.post += t0 - t1;
 
 #if defined(CONFIG_LVGL)
         k_mutex_lock(&lvgl_mutex, K_FOREVER);
@@ -250,6 +362,9 @@ namespace app {
 
         k_mutex_unlock(&lvgl_mutex);
 #endif /* CONFIG_LVGL */
+
+        timing.boxes += k_cycle_get_32() - t0;
+        timing.inferences++;
 
         if (!PresentInferenceResult(results)) {
             return false;
@@ -266,7 +381,7 @@ namespace app {
         LOG_DBG("Total number of inferences: 1");
 
         for (uint32_t i = 0; i < results.size(); ++i) {
-            LOG_INF("%" PRIu32 ") (%f) -> %s {x=%d,y=%d,w=%d,h=%d}",
+            LOG_DBG("%" PRIu32 ") (%f) -> %s {x=%d,y=%d,w=%d,h=%d}",
                  i,
                  results[i].m_normalisedVal,
                  "Detection box:",
@@ -275,6 +390,42 @@ namespace app {
                  results[i].m_w,
                  results[i].m_h);
         }
+
+        /* Summary once per second; the boxes above are logged at debug level */
+        static uint32_t windowStart;
+        static uint32_t flipsStart;
+        uint32_t now = k_uptime_get_32();
+        uint32_t ms = now - windowStart;
+
+        if (ms < 1000) {
+            return true;
+        }
+
+#if defined(CONFIG_LVGL)
+        uint32_t flips = lv_page_flip_count();
+        uint32_t n = timing.inferences;
+        uint32_t inferRate10 = n * 10000 / ms;
+        uint32_t displayRate10 = (flips - flipsStart) * 10000 / ms;
+
+        LOG_INF("%u face(s), %u.%u inferences/s, display %u.%u fps",
+                (unsigned int)results.size(), inferRate10 / 10, inferRate10 % 10,
+                displayRate10 / 10, displayRate10 % 10);
+        LOG_INF("  per inference (us): frame %u, show %u, pre %u, NPU %u, post %u, "
+                "boxes %u",
+                CyclesToUs(timing.capture, n), CyclesToUs(timing.show, n),
+                CyclesToUs(timing.pre, n), CyclesToUs(timing.npu, n),
+                CyclesToUs(timing.post, n), CyclesToUs(timing.boxes, n));
+        LOG_INF("  LVGL: %u redraws, %u us each; preview: %u frames, %u us each",
+                timing.renders, CyclesToUs(timing.render, timing.renders),
+                timing.previews, CyclesToUs(timing.preview, timing.previews));
+        flipsStart = flips;
+#else
+        LOG_INF("%u face(s), %u inferences in %u ms", (unsigned int)results.size(),
+                timing.inferences, ms);
+#endif
+
+        memset(&timing, 0, sizeof(timing));
+        windowStart = now;
 
         return true;
     }
