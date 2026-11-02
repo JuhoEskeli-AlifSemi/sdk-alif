@@ -17,6 +17,7 @@ add_library(${ALIF_UI_API_TARGET} STATIC)
 if(CONFIG_LVGL)
         target_sources(${ALIF_UI_API_TARGET} PRIVATE
                 src/lv_paint_utils.c
+                src/lv_page_flip.c
                 src/ScreenLayout.cc
                 src/Alif240.c
                 src/Alif240_white.c)

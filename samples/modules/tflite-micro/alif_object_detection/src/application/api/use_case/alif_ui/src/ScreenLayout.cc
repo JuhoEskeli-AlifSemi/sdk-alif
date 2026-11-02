@@ -6,6 +6,7 @@
 #include "ScreenLayout.hpp"
 
 #include "lvgl.h"
+#include "lv_page_flip.h"
 
 extern "C" {
 LV_IMG_DECLARE(Alif240);
@@ -31,6 +32,9 @@ static lv_style_t tiny;
 #define DISP_SCALE 2
 void ScreenLayoutInit(const void *imgData, size_t imgSize, int imgWidth, int imgHeight, unsigned short imgZoom)
 {
+    /* Tear-free output; without it LVGL keeps the default partial buffer */
+    (void)lv_page_flip_init();
+
     lv_obj_t *screen = lv_scr_act();
 
     static lv_style_t style;
